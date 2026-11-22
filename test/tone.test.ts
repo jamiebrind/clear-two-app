@@ -23,6 +23,10 @@ test('reads framed tone replies and verifies changes with a separate query', asy
         buffered = buffered.subarray(end);
         const [, band, gain] = /RAKOIT:(BAS|MID|TRE)(?::(-?\d+))?&$/.exec(data)!;
         requests.push(data.slice(15, -1));
+        if (band === 'TRE' && gain === '-3') {
+          socket.write(frameCommand('MCU+PAS+RAKOIT:ERR:unavailable&'));
+          continue;
+        }
         if (gain !== undefined) tones[band] = Number(gain);
         const packet = frameCommand(`MCU+PAS+RAKOIT:${band}:${tones[band]}&`);
         socket.write(packet.subarray(0, 8));
@@ -38,6 +42,13 @@ test('reads framed tone replies and verifies changes with a separate query', asy
     assert.deepEqual(await controller.read(), { bass: 0, mid: 1, treble: 2 });
     assert.equal(await controller.change({ band: 'mid', gain: -1 }), -1);
     assert.deepEqual(requests, ['BAS', 'MID', 'TRE', 'MID:-1', 'MID']);
+    const original = { bass: 0, mid: -1, treble: 2 };
+    const tuned = { ...original, bass: -2, treble: 1 };
+    assert.deepEqual(await controller.replace(original, tuned), tuned);
+    await assert.rejects(controller.replace(original, tuned), /changed since/i);
+    assert.deepEqual(await controller.replace(tuned, original), original);
+    await assert.rejects(controller.replace(original, { ...tuned, treble: -3 }), /previous settings were restored/i);
+    assert.deepEqual(await controller.read(), original);
   } finally {
     await new Promise<void>((resolve) => simulator.close(() => resolve()));
   }

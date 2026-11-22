@@ -68,6 +68,13 @@ h1 { margin: 0; font-size: clamp(1.65rem, 5vw, 2.7rem); line-height: 1.12; lette
 .input-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .input-picker select { flex: 1 1 11rem; }
 .input-hint { color: var(--muted); font-size: .92rem; margin: 10px 0 0; }
+.tuning-tag { margin-left: auto; color: var(--muted); font-size: .78rem; font-weight: 500; }
+.tuning button + button { margin-left: 8px; }
+.tuning-result { width: 100%; border-collapse: collapse; text-align: left; font-size: .92rem; font-variant-numeric: tabular-nums; }
+.tuning-result td, .tuning-result th { padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.tuning-result th[scope="row"] { text-transform: capitalize; }
+.tuning-actions { margin: 14px 0 8px; }
+.tuning details summary { padding-inline: 0; }
 .mute { display: flex; align-items: center; gap: 7px; font-weight: 650; }
 label { margin-top: 20px; color: var(--muted); font-size: .92rem; }
 label span { color: var(--ink); font-weight: 720; font-variant-numeric: tabular-nums; }

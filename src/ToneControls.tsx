@@ -5,7 +5,7 @@ import { toneBands } from './tone.ts';
 import type { ToneChange, ToneSettings } from './tone.ts';
 
 const labels = { bass: 'Bass', mid: 'Mid', treble: 'Treble' };
-export function ToneControls({ roomId, online }: { roomId?: string; online: boolean }) {
+export function ToneControls({ roomId, online, revision }: { roomId?: string; online: boolean; revision: number }) {
   const [settings, setSettings] = useState<ToneSettings>();
   const [draft, setDraft] = useState<Partial<ToneSettings>>({});
   const [busy, setBusy] = useState(false);
@@ -43,7 +43,7 @@ export function ToneControls({ roomId, online }: { roomId?: string; online: bool
 
   useEffect(() => {
     if (open && online) void update();
-  }, [open, online]);
+  }, [open, online, revision]);
 
   return (
     <details className="device tone" onToggle={(event) => setOpen(event.currentTarget.open)}>

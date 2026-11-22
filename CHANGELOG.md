@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.5.0
+
+- Added experimental room tuning with three browser microphone measurements and conservative EQ suggestions.
+- Added an Original and Tuned comparison with amplifier readback and optional HTTPS for phone microphone access.
+
 ## v0.4.0
 
 - Added a per-room input selector with amplifier readback. Optional digital and secondary analog inputs come from the speaker’s capability report.

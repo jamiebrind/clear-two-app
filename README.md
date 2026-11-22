@@ -35,3 +35,11 @@ The bridge accepts setup requests on loopback. Wi-Fi credentials are used for th
 - Browser delivery is implemented. Native iOS and Android packaging will use Capacitor and a direct LAN transport. UPnP queue access, stereo pairing, and ACPWorkbench profile recall are future increments.
 
 [Arylic HTTP playback reference](https://developer.arylic.com/httpapi/#playback-control)
+
+## Experimental room tuning
+
+Open **Room tuning** on a standalone speaker. Pause or stop playback, select **Wi-Fi / Network**, and unmute the speaker at 1–25% volume. The bridge must listen on its LAN IP so the amplifier can fetch the test sweep. Playing the sweep can replace the current queue.
+
+Take three measurements at ear height around your listening position. The browser asks for microphone permission and analyses the samples locally. If the capture is too noisy, clips, or disagrees with the other positions, repeat the measurement as prompted. The experiment measures bass, mid and treble ranges and can reduce excessive bass or treble by up to 3 dB. It uses midrange as a reference and has no phone-specific calibration. Applying a suggested EQ saves the original values in the browser for **Restore original** after reloading.
+
+On the bridge computer, open the local `http://127.0.0.1:4273` page. On a phone, open the bridge over trusted HTTPS on the LAN. Set `CLEAR_TWO_TLS_KEY` and `CLEAR_TWO_TLS_CERT` to PEM files for a certificate valid for the bridge IP, ensure the phone trusts its issuing CA, and restart the bridge. Use `https://<bridge-ip>:4274`, or the port set by `CLEAR_TWO_HTTPS_PORT`. Keep the HTTP LAN listener running for the amplifier to fetch the test sweep. No microphone recordings are uploaded or saved.

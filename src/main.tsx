@@ -5,6 +5,7 @@ import { requestJson } from './client.ts';
 import { ToneControls } from './ToneControls.tsx';
 import { SpeakerSetup } from './SpeakerSetup.tsx';
 import { GroupControls } from './GroupControls.tsx';
+import { RoomTuning } from './RoomTuning.tsx';
 import { inputLabels, type InputId } from './inputs.ts';
 import type { RoomSummary } from './rooms.ts';
 import type { SpeakerState } from './speaker.ts';
@@ -154,6 +155,7 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
   const [draft, setDraft] = useState<number | null>(null);
   const [inputDraft, setInputDraft] = useState<InputId | null>(null);
   const [working, setWorking] = useState(false);
+  const [toneRevision, setToneRevision] = useState(0);
   const reading = useRef<Promise<SpeakerState> | null>(null);
   const changing = useRef(false);
   const legacy = room.id === legacyRoomId;
@@ -260,7 +262,8 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
         </section>
 
         {!legacy && <GroupControls room={room} rooms={rooms} online={connection === 'online'} onChange={() => void refresh()} />}
-        <ToneControls roomId={legacy ? undefined : room.id} online={connection === 'online'} />
+        <ToneControls roomId={legacy ? undefined : room.id} online={connection === 'online'} revision={toneRevision} />
+        <RoomTuning roomId={legacy ? undefined : room.id} online={connection === 'online'} onEqChange={() => setToneRevision((value) => value + 1)} />
         <details className="device"><summary>Device information <ChevronDown size={18} aria-hidden="true" /></summary>
           <dl><div><dt>Board</dt><dd>{speaker.model ?? 'Unavailable'}</dd></div><div><dt>Network firmware</dt><dd>{speaker.firmware ?? 'Unavailable'}</dd></div></dl>
         </details></>}

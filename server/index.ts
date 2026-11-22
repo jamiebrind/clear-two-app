@@ -1,10 +1,12 @@
 import { createServer } from 'node:http';
+import { createServer as createSecureServer } from 'node:https';
 import { isIPv4 } from 'node:net';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createSpeaker, InputConflict, parseInputChange, parseLevelChange } from '../src/speaker.ts';
-import { createToneController, parseToneChange } from './tone.ts';
+import { createToneController, parseToneChange, ToneConflict } from './tone.ts';
+import { createSweepPlayback, parseTuningSettings, TuningConflict, verifySweepPlayback, verifyTuningRoom } from './roomTuning.ts';
 import { createSetup, localAddress, validUuid } from './setup.ts';
 import { discoverSpeakers } from './discovery.ts';
 import { createGroup, GroupConflict, parseGroupAction } from './group.ts';
@@ -22,6 +24,9 @@ try {
 }
 const host = process.env.CLEAR_TWO_HOST ?? '127.0.0.1';
 const port = Number(process.env.CLEAR_TWO_PORT ?? 4273);
+const tlsPort = Number(process.env.CLEAR_TWO_HTTPS_PORT ?? 4274);
+const tlsKey = process.env.CLEAR_TWO_TLS_KEY;
+const tlsCert = process.env.CLEAR_TWO_TLS_CERT;
 const development = process.argv.includes('--dev');
 
 if (configuredAddress && !localAddress(configuredAddress)) {
@@ -29,6 +34,9 @@ if (configuredAddress && !localAddress(configuredAddress)) {
 }
 if (!isIPv4(host) || host === '0.0.0.0' || !Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('Bind the bridge to a specific IPv4 address and a port from 1 to 65535.');
+}
+if (Boolean(tlsKey) !== Boolean(tlsCert) || (tlsKey && (!Number.isInteger(tlsPort) || tlsPort < 1 || tlsPort > 65535 || tlsPort === port))) {
+  throw new Error('Set both TLS file paths and choose a separate valid HTTPS port.');
 }
 
 async function requestDevice(address: string, command: string, limit?: AbortSignal) {
@@ -106,7 +114,9 @@ async function mutate<T>(devices: Room[], operation: () => Promise<T>, affectsGr
 
 const app = express();
 const server = createServer(app);
+const secureServer = tlsKey && tlsCert ? createSecureServer({ key: readFileSync(tlsKey), cert: readFileSync(tlsCert) }, app) : undefined;
 const allowedHosts = new Set([`${host}:${port}`, `127.0.0.1:${port}`, `localhost:${port}`]);
+if (secureServer) allowedHosts.add(`${host}:${tlsPort}`);
 app.disable('x-powered-by');
 
 app.use((request, response, next) => {
@@ -137,7 +147,7 @@ app.get('/api/speaker', async (_request, response) => {
 });
 
 app.use('/api', (request, response, next) => {
-  if (request.method === 'POST' && request.get('origin') !== `http://${request.get('host')}`) {
+  if (request.method === 'POST' && request.get('origin') !== `${request.protocol}://${request.get('host')}`) {
     response.status(403).json({ error: 'Open Clear Two directly to use the controls.' });
     return;
   }
@@ -218,8 +228,8 @@ app.post('/api/setup/add', setupJson, async (request, response) => {
 });
 
 function writeFailure(response: express.Response, error: unknown, message: string) {
-  const conflict = error instanceof GroupConflict || error instanceof InputConflict;
-  const detail = conflict || error instanceof RoomUnavailable || (error instanceof Error && /^The amplifier |^Could not confirm/.test(error.message));
+  const conflict = error instanceof GroupConflict || error instanceof InputConflict || error instanceof ToneConflict || error instanceof TuningConflict;
+  const detail = conflict || error instanceof RoomUnavailable || (error instanceof Error && /^The amplifier |^Could not (confirm|restore)/.test(error.message));
   response.status(conflict ? 409 : 502).json({ error: detail ? error.message : message });
 }
 
@@ -290,6 +300,50 @@ app.post('/api/speaker/tone', express.json({ limit: '1kb' }), async (request, re
   }
 });
 
+const tuningSweep = createSweepPlayback();
+
+app.get('/api/tuning/sweep/:token', (request, response) => {
+  const wav = tuningSweep.read(request.params.token, request.socket.remoteAddress);
+  if (!wav) { response.sendStatus(404); return; }
+  response.type('audio/wav').send(wav);
+});
+
+app.post('/api/tuning/measure', setupJson, async (request, response) => {
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
+  try {
+    await mutate([selected], async () => {
+      if (host.startsWith('127.')) throw new TuningConflict('Bind the bridge to its LAN address so the speaker can fetch the sweep.');
+      const room = await verifyRoom(selected);
+      const [state, group] = await Promise.all([configuredSpeaker(room.address).read(), createGroup(requestDevice).read(room.address)]);
+      verifySweepPlayback(state, group);
+      const token = tuningSweep.issue(room.address);
+      const reply = await requestDevice(room.address, `setPlayerCmd:play:http://${host}:${port}/api/tuning/sweep/${token}`).catch(() => null);
+      if (reply !== null && reply.trim() !== 'OK') throw new Error('The amplifier rejected the test sweep.');
+    }, true);
+    response.json({ measuring: true });
+  } catch (error) {
+    writeFailure(response, error, 'Could not start the test sweep. Check the speaker and try again.');
+  }
+});
+
+app.post('/api/tuning/eq', setupJson, async (request, response) => {
+  const original = parseTuningSettings(request.body?.expected);
+  const target = parseTuningSettings(request.body?.target);
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
+  if (!original || !target) { response.status(400).json({ error: 'Send both valid EQ profiles.' }); return; }
+  try {
+    response.json(await mutate([selected], async () => {
+      const room = await verifyRoom(selected);
+      verifyTuningRoom(await createGroup(requestDevice).read(room.address));
+      return toneController(room.address).replace(original, target);
+    }, true));
+  } catch (error) {
+    writeFailure(response, error, 'Could not confirm the EQ change. Check Tone controls and try again.');
+  }
+});
+
 app.get('/api/rooms/:id/group', async (request, response) => {
   const selected = registry.get(request.params.id);
   if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
@@ -330,6 +384,7 @@ if (development) {
 }
 
 server.listen(port, host, () => console.log(`Clear Two is running at http://${host}:${port}`));
+secureServer?.listen(tlsPort, host, () => console.log(`Clear Two microphone access is available at https://${host}:${tlsPort}`));
 if (host !== '127.0.0.1') {
   createServer(app).listen(port, '127.0.0.1', () => console.log(`Clear Two setup is available at http://127.0.0.1:${port}`));
 }
