@@ -4,7 +4,7 @@ import { isIPv4 } from 'node:net';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createSpeaker, InputConflict, parseInputChange, parseLevelChange } from '../src/speaker.ts';
+import { createSpeaker, InputConflict, parseInputChange, parseLevelChange, parsePlaybackChange, PlaybackConflict } from '../src/speaker.ts';
 import { createToneController, parseToneChange, ToneConflict } from './tone.ts';
 import { createSweepPlayback, parseTuningSettings, TuningConflict, verifySweepPlayback, verifyTuningRoom } from './roomTuning.ts';
 import { createSetup, localAddress, validUuid } from './setup.ts';
@@ -56,7 +56,7 @@ const registry = createRooms(storedRooms, configuredAddress, (value) => {
 const tonesByAddress = new Map<string, ReturnType<typeof createToneController>>();
 const mutating = new Set<string>();
 let changingGroup = false;
-let discovery: Promise<void> | undefined;
+let discovery: Promise<number> | undefined;
 let lastDiscovery = -Infinity;
 
 function roomsResponse() {
@@ -65,12 +65,14 @@ function roomsResponse() {
   return { rooms: registry.list(), ...(defaultId && { defaultId }), ...(configuredId && { configuredId }) };
 }
 
-function findRooms(): Promise<void> {
+function findRooms(): Promise<number> {
   if (discovery) return discovery;
   lastDiscovery = Date.now();
   discovery = discoverSpeakers().then(async (addresses) => {
     const results = await Promise.allSettled(addresses.map(async (address) => ({ ...await setup.verify(address), address })));
-    registry.remember(results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+    const found = results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []);
+    registry.remember(found);
+    return new Set(found.map((speaker) => speaker.uuid)).size;
   }).finally(() => { discovery = undefined; });
   return discovery;
 }
@@ -158,9 +160,13 @@ app.get('/api/rooms', (_request, response) => response.json(roomsResponse()));
 
 app.post('/api/rooms/discover', async (_request, response) => {
   try {
-    await findRooms();
-    response.json(roomsResponse());
+    const foundCount = await findRooms();
+    response.json({ ...roomsResponse(), foundCount });
   } catch { response.status(502).json({ error: 'Could not scan for speakers. Try again or add a speaker by address.' }); }
+});
+
+app.get('/api/setup/location', (_request, response) => {
+  response.json({ url: `http://127.0.0.1:${port}/?setup` });
 });
 
 app.use('/api/setup', (request, response, next) => {
@@ -228,7 +234,7 @@ app.post('/api/setup/add', setupJson, async (request, response) => {
 });
 
 function writeFailure(response: express.Response, error: unknown, message: string) {
-  const conflict = error instanceof GroupConflict || error instanceof InputConflict || error instanceof ToneConflict || error instanceof TuningConflict;
+  const conflict = error instanceof GroupConflict || error instanceof InputConflict || error instanceof PlaybackConflict || error instanceof ToneConflict || error instanceof TuningConflict;
   const detail = conflict || error instanceof RoomUnavailable || (error instanceof Error && /^The amplifier |^Could not (confirm|restore)/.test(error.message));
   response.status(conflict ? 409 : 502).json({ error: detail ? error.message : message });
 }
@@ -262,6 +268,23 @@ app.post('/api/speaker/input', express.json({ limit: '1kb' }), async (request, r
     response.json(state);
   } catch (error) {
     writeFailure(response, error, 'Could not confirm the input change. Check the selected input before trying again.');
+  }
+});
+
+app.post('/api/speaker/playback', express.json({ limit: '1kb' }), async (request, response) => {
+  const change = parsePlaybackChange(request.body);
+  if (!change) { response.status(400).json({ error: 'Choose Pause or Resume for the current source.' }); return; }
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
+  try {
+    const state = await mutate([selected], async () => {
+      const deadline = AbortSignal.timeout(12500);
+      const room = await verifyRoom(selected, deadline);
+      return createSpeaker((command) => requestDevice(room.address, command, deadline)).setPlayback(change);
+    }, true);
+    response.json(state);
+  } catch (error) {
+    writeFailure(response, error, 'Could not confirm the playback change. Refresh to check Now playing.');
   }
 });
 
@@ -312,16 +335,20 @@ app.post('/api/tuning/measure', setupJson, async (request, response) => {
   const selected = requestedRoom(request.query.room);
   if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
   try {
-    await mutate([selected], async () => {
+    const volume = await mutate([selected], async () => {
       if (host.startsWith('127.')) throw new TuningConflict('Bind the bridge to its LAN address so the speaker can fetch the sweep.');
       const room = await verifyRoom(selected);
       const [state, group] = await Promise.all([configuredSpeaker(room.address).read(), createGroup(requestDevice).read(room.address)]);
       verifySweepPlayback(state, group);
+      if (request.body?.expectedVolume !== undefined && request.body.expectedVolume !== state.volume) {
+        throw new TuningConflict('Speaker volume changed between positions. Restore the original volume or start over.');
+      }
       const token = tuningSweep.issue(room.address);
       const reply = await requestDevice(room.address, `setPlayerCmd:play:http://${host}:${port}/api/tuning/sweep/${token}`).catch(() => null);
       if (reply !== null && reply.trim() !== 'OK') throw new Error('The amplifier rejected the test sweep.');
+      return state.volume;
     }, true);
-    response.json({ measuring: true });
+    response.json({ measuring: true, volume });
   } catch (error) {
     writeFailure(response, error, 'Could not start the test sweep. Check the speaker and try again.');
   }

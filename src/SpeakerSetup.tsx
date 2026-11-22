@@ -16,9 +16,19 @@ export function SpeakerSetup({ onClose }: { onClose: (roomId?: string) => void }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [timedOut, setTimedOut] = useState(false);
+  const [localSetupUrl, setLocalSetupUrl] = useState('');
   const network = networkIndex === '' ? undefined : scan?.networks[Number(networkIndex)];
   const uuid = scan?.speaker.uuid;
   const isLocal = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+
+  useEffect(() => {
+    if (isLocal) return;
+    let active = true;
+    requestJson<{ url: string }>(`${api}/location`).then(({ url }) => {
+      if (active) setLocalSetupUrl(url);
+    }).catch(() => { /* The startup message also provides the local setup address. */ });
+    return () => { active = false; };
+  }, [isLocal]);
 
   useEffect(() => {
     if (step !== 'join' || !uuid) return;
@@ -68,7 +78,8 @@ export function SpeakerSetup({ onClose }: { onClose: (roomId?: string) => void }
     <section className="setup" aria-labelledby="setup-title" aria-busy={busy}>
       <div className="setup-heading"><span className="source-icon"><Icon size={25} aria-hidden="true" /></span><h1 id="setup-title" aria-live="polite">{headings[step]}</h1></div>
       {!isLocal ? <div className="setup-actions">
-        <p>On the computer running the Clear Two bridge, open <code>http://127.0.0.1:{window.location.port || '4273'}/?setup</code> to add a speaker.</p>
+        <p>On the computer running the Clear Two bridge, open {localSetupUrl
+          ? <code>{localSetupUrl}</code> : 'the local setup address shown when the bridge starts'} to add a speaker.</p>
         <p>If the speaker is already on your network, return to Rooms and use Scan network.</p>
       </div> : <>
         {step === 'start' && <div className="setup-actions">

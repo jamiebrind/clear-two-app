@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.6.0
+
+- Added pause and resume to Now Playing for device-managed network tracks, URL streams and USB drives. The bridge verifies the room, source and reported state.
+- Added a compact phone room picker and remembered the last selected room. Discovery reports how many speakers answered the scan.
+- Improved group-volume confirmation, bridge error messages and the setup handoff from HTTPS.
+- Tightened experimental tuning checks for ambient tones, inconsistent measurements and changing playback levels.
+- Published the product and release-readiness assessment and added automated Windows build and test checks.
+
 ## v0.5.0
 
 - Added experimental room tuning with three browser microphone measurements and conservative EQ suggestions.

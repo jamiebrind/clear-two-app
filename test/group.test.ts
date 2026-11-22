@@ -55,16 +55,24 @@ test('rejects malformed devices and validates changing an existing member throug
   await assert.rejects(invalid.read(host), /group data/i);
 });
 
-test('sets and confirms an absolute group level for the host and every guest', async () => {
+test('sets every group volume once even when the host takes a read to report the change', async () => {
   let hostVolume = 30;
   let guestVolume = 20;
+  let previousVolume: number | undefined;
   const writes: string[] = [];
   const engine = createGroup(async (ip, command) => {
     assert.equal(ip, host);
-    if (command === 'getPlayerStatus') return JSON.stringify({ type: '0', mode: '10', vol: hostVolume });
+    if (command === 'getPlayerStatus') {
+      const vol = previousVolume ?? hostVolume;
+      previousVolume = undefined;
+      return JSON.stringify({ type: '0', mode: '10', vol });
+    }
     if (command === 'multiroom:getSlaveList') return grouped.replace('"volume":"20"', `"volume":"${guestVolume}"`);
     writes.push(command);
-    if (command === 'setPlayerCmd:vol:25') hostVolume = 25;
+    if (command === 'setPlayerCmd:vol:25') {
+      previousVolume = hostVolume;
+      hostVolume = 25;
+    }
     else if (command === `multiroom:SlaveVolume:${guest}:25`) guestVolume = 25;
     else assert.fail(command);
     return 'OK';

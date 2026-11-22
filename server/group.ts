@@ -68,11 +68,11 @@ export function createGroup(request: SetupTransport) {
     return publicState(await inspect(address));
   }
 
-  async function confirm(host: string, matches: (snapshot: GroupSnapshot) => boolean): Promise<GroupState | null> {
+  async function confirm(host: string, matches: (snapshot: GroupSnapshot) => boolean): Promise<GroupSnapshot | null> {
     for (let attempt = 0; attempt < 4; attempt++) {
       if (attempt) await delay(240 * attempt);
       const actual = await inspect(host).catch(() => null);
-      if (actual && !actual.isGuest && matches(actual)) return publicState(actual);
+      if (actual && !actual.isGuest && matches(actual)) return actual;
     }
     return null;
   }
@@ -84,8 +84,8 @@ export function createGroup(request: SetupTransport) {
       const reply = await request(host, `setPlayerCmd:vol:${level}`).catch(() => null);
       if (reply !== null && reply.trim() !== 'OK') throw new Error('The amplifier rejected the group volume change.');
     }
-    const refreshed = await inspect(host).catch(() => null);
-    if (!refreshed || refreshed.isGuest || refreshed.hostVolume !== level) {
+    const refreshed = await confirm(host, (actual) => actual.hostVolume === level);
+    if (!refreshed) {
       throw new Error('Could not confirm host volume. Refresh the group before trying again.');
     }
     const originals = new Set(before.members.map(({ id }) => id));
@@ -97,7 +97,7 @@ export function createGroup(request: SetupTransport) {
     const result = await confirm(host, (actual) => actual.hostVolume === level && actual.members.length === originals.size &&
       actual.members.every((member) => originals.has(member.id) && member.volume === level));
     if (!result) throw new Error('Could not confirm the volume in every room. Some rooms may have changed. Refresh to check.');
-    return result;
+    return publicState(result);
   }
 
   async function change(host: string, change: GroupAction, joiningAddress?: string): Promise<GroupState> {
@@ -146,7 +146,7 @@ export function createGroup(request: SetupTransport) {
     const acknowledgement = await request(destination, command).catch(() => null);
     if (acknowledgement !== null && acknowledgement.trim() !== 'OK') throw new Error('The amplifier rejected the group change.');
     const result = await confirm(host, (actual) => matches(actual.members));
-    if (result) return result;
+    if (result) return publicState(result);
     throw new Error('Could not confirm the group change. Refresh the group to see its current state.');
   }
 

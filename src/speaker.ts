@@ -17,6 +17,14 @@ const playbackInputs: Record<string, InputId> = {
 const ampV4Inputs = new Set<InputId>(['aux', 'bluetooth', 'usb-drive', 'usb-dac']);
 
 export class InputConflict extends Error {}
+export class PlaybackConflict extends Error {}
+
+type PlaybackMode = '10' | '11' | '20';
+type PlaybackChange = { action: 'pause' | 'resume'; mode: PlaybackMode };
+
+function isPlaybackMode(mode: unknown): mode is PlaybackMode {
+  return mode === '10' || mode === '11' || mode === '20';
+}
 
 export interface SpeakerState {
   name: string;
@@ -31,6 +39,7 @@ export interface SpeakerState {
   input: InputId | null;
   inputs: InputId[];
   groupGuest: boolean;
+  playback?: PlaybackChange;
 }
 
 export type LevelChange = { volume: number } | { mute: boolean };
@@ -82,6 +91,13 @@ export function parseInputChange(body: unknown): InputId | null {
   return typeof body.input === 'string' && Object.hasOwn(inputLabels, body.input) ? body.input as InputId : null;
 }
 
+export function parsePlaybackChange(body: unknown): PlaybackChange | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 2
+      || !('action' in body) || !('mode' in body)) return null;
+  const { action, mode } = body;
+  return (action === 'pause' || action === 'resume') && isPlaybackMode(mode) ? { action, mode } : null;
+}
+
 function supportedInputs(model: string | null, value: unknown): InputId[] {
   const raw = String(value);
   const mask = /^(?:0x[0-9a-f]{1,8}|\d{1,10})$/i.test(raw) ? Number(raw) : 0;
@@ -90,11 +106,11 @@ function supportedInputs(model: string | null, value: unknown): InputId[] {
 }
 
 export function createSpeaker(send: SendCommand) {
+  const readPlayer = () => send('getPlayerStatus').then(parseObject);
+  const readReports = () => Promise.all([send('getStatusEx').then(parseObject), readPlayer()]);
+
   async function read(): Promise<SpeakerState> {
-    const [device, player] = await Promise.all([
-      send('getStatusEx').then(parseObject),
-      send('getPlayerStatus').then(parseObject),
-    ]);
+    const [device, player] = await readReports();
     return speakerState(device, player);
   }
 
@@ -106,6 +122,7 @@ export function createSpeaker(send: SendCommand) {
     const mode = String(player.mode);
     const groupGuest = String(player.type) === '1' || mode === '99';
     const model = text(device.project);
+    const action = player.status === 'play' ? 'pause' : player.status === 'pause' ? 'resume' : null;
     return {
       name,
       model,
@@ -119,6 +136,7 @@ export function createSpeaker(send: SendCommand) {
       input: !groupGuest && Object.hasOwn(playbackInputs, mode) ? playbackInputs[mode] : null,
       inputs: supportedInputs(model, device.plm_support),
       groupGuest,
+      ...(action && String(player.type) === '0' && isPlaybackMode(mode) && { playback: { action, mode } }),
     };
   }
 
@@ -135,8 +153,7 @@ export function createSpeaker(send: SendCommand) {
   }
 
   async function switchInput(input: InputId): Promise<SpeakerState> {
-    const readPlayer = () => send('getPlayerStatus').then(parseObject);
-    const [device, player] = await Promise.all([send('getStatusEx').then(parseObject), readPlayer()]);
+    const [device, player] = await readReports();
     const before = speakerState(device, player);
     if (before.groupGuest) throw new InputConflict('Change the input in the host room.');
     if (!before.inputs.includes(input)) throw new InputConflict('This speaker does not report support for that input.');
@@ -155,5 +172,34 @@ export function createSpeaker(send: SendCommand) {
     throw new Error('Could not confirm the input change. Check the selected input before trying again.');
   }
 
-  return { read, change, switchInput };
+  async function setPlayback(change: PlaybackChange): Promise<SpeakerState> {
+    function verifySource(player: Record<string, unknown>) {
+      if (String(player.type) === '1' || String(player.mode) === '99') {
+        throw new PlaybackConflict('Control playback in the host room.');
+      }
+      if (String(player.type) !== '0' || String(player.mode) !== change.mode) {
+        throw new PlaybackConflict('The playback source changed. Check Now playing and try again.');
+      }
+    }
+
+    const [device, player] = await readReports();
+    verifySource(player);
+    const before = speakerState(device, player);
+    if (!before.playback) throw new PlaybackConflict('Choose a playing or paused track first.');
+    if (before.playback.action !== change.action) return before;
+
+    const reply = await send(`setPlayerCmd:${change.action}`).catch(() => null);
+    if (reply !== null && reply.trim() !== 'OK') throw new Error('The amplifier rejected the playback change.');
+    const expectedStatus = change.action === 'pause' ? 'pause' : 'play';
+    for (const wait of [0, 300, 600]) {
+      if (wait) await delay(wait);
+      const updated = await readPlayer().catch(() => null);
+      if (!updated) continue;
+      verifySource(updated);
+      if (updated.status === expectedStatus) return speakerState(device, updated);
+    }
+    throw new Error('Could not confirm the playback change. Check Now playing before trying again.');
+  }
+
+  return { read, change, switchInput, setPlayback };
 }

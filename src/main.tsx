@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { AudioLines, ChevronDown, Plus, Radar, RefreshCw, Speaker, Volume2, VolumeX } from 'lucide-react';
+import { AudioLines, ChevronDown, Pause, Play, Plus, Radar, RefreshCw, Speaker, Volume2, VolumeX } from 'lucide-react';
 import { requestJson } from './client.ts';
 import { ToneControls } from './ToneControls.tsx';
 import { SpeakerSetup } from './SpeakerSetup.tsx';
@@ -13,9 +13,16 @@ import './styles.css';
 
 const roomsEndpoint = '/api/rooms';
 const legacyRoomId = 'legacy';
+const lastRoomKey = 'clear-two:last-room';
+
+function lastRoom(): string | null {
+  try { return localStorage.getItem(lastRoomKey); }
+  catch { return null; }
+}
 
 interface RoomList {
   rooms: RoomSummary[];
+  foundCount?: number;
   defaultId?: string;
   configuredId?: string;
 }
@@ -40,6 +47,8 @@ function App() {
   function select(id: string) {
     setSelectedId(id);
     setUrlParameter('room', id);
+    try { localStorage.setItem(lastRoomKey, id); }
+    catch { /* The room URL still preserves selection when storage is unavailable. */ }
   }
 
   async function loadRooms(discover = false, newlyAddedId?: string) {
@@ -57,10 +66,10 @@ function App() {
       );
       setRoomList(result);
       if (discover) {
-        const available = result.rooms;
-        setNotice(available.length
-          ? `${available.length} ${available.length === 1 ? 'speaker' : 'speakers'} in your room list.`
-          : 'No compatible speakers found. Check that the amps are on the same network as Clear Two.');
+        const count = result.foundCount;
+        setNotice(count === undefined ? 'Room list refreshed.' : count === 0
+          ? 'No speakers responded. Check that the speakers and bridge are on the same network.'
+          : `Found ${count} ${count === 1 ? 'speaker' : 'speakers'} on the network.`);
       }
     } catch (problem) {
       if (!discover && problem instanceof Error && problem.message === 'Unknown Clear Two endpoint.') {
@@ -100,7 +109,9 @@ function App() {
   const explicitRoom = available.find(({ id }) => id === selectedId);
   const configuredId = roomList?.configuredId;
   const migratedRoom = selectedId === 'configured' && !explicitRoom ? available.find(({ id }) => id === configuredId) : undefined;
-  const defaultRoom = available.find(({ id }) => id === roomList?.defaultId) ?? available[0];
+  const previousId = selectedId === null ? lastRoom() : null;
+  const defaultRoom = available.find(({ id }) => id === previousId)
+    ?? available.find(({ id }) => id === roomList?.defaultId) ?? available[0];
   const selectedRoom = explicitRoom ?? migratedRoom ?? (selectedId === null ? defaultRoom : undefined);
   const unavailable = selectedId !== null && !selectedRoom && Boolean(available.length);
   const emptyHeading = roomsError ? 'Rooms unavailable' : loading || !rooms ? 'Loading rooms…'
@@ -120,7 +131,14 @@ function App() {
       {showSetup ? <SpeakerSetup onClose={closeSetup} /> : <div className="workspace">
         <aside className="rooms-panel" aria-labelledby="rooms-heading">
           <div className="rooms-heading"><h2 id="rooms-heading">Rooms</h2>{rooms && <span className="room-count" aria-label={`${rooms.length} saved speakers`}>{rooms.length}</span>}</div>
-          {available.length > 0 && <nav aria-label="Rooms">
+          {available.length > 0 && <label className="mobile-room-picker">
+            <Speaker size={19} aria-hidden="true" />
+            <select aria-label="Choose room" value={selectedRoom?.id ?? ''} onChange={(event) => select(event.target.value)}>
+              {!selectedRoom && <option value="" disabled>Choose a room</option>}
+              {available.map(({ id, name }) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </label>}
+          {available.length > 0 && <nav className="desktop-room-list" aria-label="Rooms">
             <ul className="room-list">
               {available.map(({ id, name }) => <li key={id}>
                 <button type="button" className="room-choice" aria-current={selectedRoom?.id === id ? 'true' : undefined} onClick={() => select(id)}>
@@ -151,10 +169,11 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('connecting');
   const [connectionError, setConnectionError] = useState('');
   const [controlError, setControlError] = useState('');
+  const [playbackError, setPlaybackError] = useState('');
   const [inputError, setInputError] = useState('');
   const [draft, setDraft] = useState<number | null>(null);
   const [inputDraft, setInputDraft] = useState<InputId | null>(null);
-  const [working, setWorking] = useState(false);
+  const [working, setWorking] = useState<'input' | 'level' | 'playback' | null>(null);
   const [toneRevision, setToneRevision] = useState(0);
   const reading = useRef<Promise<SpeakerState> | null>(null);
   const changing = useRef(false);
@@ -184,16 +203,16 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function applySetting(setting: 'input' | 'level', value: object) {
+  async function applySetting(setting: 'input' | 'level' | 'playback', value: object) {
     if (changing.current || connection !== 'online') return;
     changing.current = true;
-    setWorking(true);
-    const setError = setting === 'input' ? setInputError : setControlError;
+    setWorking(setting);
+    const setError = { input: setInputError, playback: setPlaybackError, level: setControlError }[setting];
     setError('');
     let failed = false;
     try {
       await reading.current?.catch(() => {});
-      setSpeaker(await requestJson<SpeakerState>(`/api/speaker/${setting}${query}`, value, setting === 'input' ? 15000 : 7500));
+      setSpeaker(await requestJson<SpeakerState>(`/api/speaker/${setting}${query}`, value, setting === 'level' ? 7500 : 15000));
       setConnection('online');
       setConnectionError('');
     } catch (error) {
@@ -201,7 +220,7 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
       setError(error instanceof Error ? error.message : 'Could not confirm the new setting.');
     } finally {
       changing.current = false;
-      setWorking(false);
+      setWorking(null);
       if (setting === 'input') setInputDraft(null);
       if ('volume' in value) setDraft(null);
       if (failed) void refresh();
@@ -209,7 +228,8 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
   }
 
   const volume = draft ?? speaker?.volume;
-  const disabled = connection !== 'online' || working;
+  const disabled = connection !== 'online' || working !== null;
+  const playback = speaker?.playback;
   const selectedInput = inputDraft ?? speaker?.input;
   const pickerValue = selectedInput && speaker?.inputs?.includes(selectedInput) ? selectedInput : '';
   const connectionLabel = { connecting: 'Connecting', online: 'Connected', offline: 'Offline' }[connection];
@@ -219,19 +239,24 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
         <div className="room-heading">
           <div><h1 id="selected-room">{speaker?.name ?? room.name}</h1>
             <div className={`connection ${connection}`} role="status"><span aria-hidden="true" />{connectionLabel}</div></div>
-          <button type="button" className="icon-button" onClick={() => void refresh()} aria-label="Refresh speaker status" title="Refresh speaker status" disabled={working}><RefreshCw size={18} /></button>
+          <button type="button" className="icon-button" onClick={() => void refresh()} aria-label="Refresh speaker status" title="Refresh speaker status" disabled={working !== null}><RefreshCw size={18} /></button>
         </div>
         {connectionError && <p className="feedback" role="status">{connectionError}</p>}
 
         {speaker && <><section className="playing" aria-labelledby="now-playing">
           <div className="source-icon"><AudioLines size={32} strokeWidth={1.6} aria-hidden="true" /></div>
           <div className="now-playing">
-            <h2 id="now-playing">Now playing</h2>
-            <p className="track">{speaker?.title ?? speaker?.source ?? 'Waiting for speaker'}</p>
-            {speaker && <p className="source">{speaker.title ? [speaker.artist, speaker.source].filter(Boolean).join(' · ') : speaker.status}</p>}
+            <h2 id="now-playing">{connection === 'offline' ? 'Last known playback' : 'Now playing'}</h2>
+            <p className="track">{speaker.title ?? speaker.source}</p>
+            <p className="source">{speaker.title ? [speaker.artist, speaker.source, speaker.status].filter(Boolean).join(' · ') : speaker.status}</p>
           </div>
-          {speaker?.title && <span className="playing-status">{speaker.status}</span>}
+          {playback && <button type="button" className="playback-control" disabled={disabled}
+            onClick={() => void applySetting('playback', playback)} aria-label={playback.action === 'pause' ? 'Pause playback' : 'Resume playback'}>
+            {playback.action === 'pause' ? <Pause size={17} aria-hidden="true" /> : <Play size={17} aria-hidden="true" />}
+            {working === 'playback' ? (playback.action === 'pause' ? 'Pausing…' : 'Resuming…') : (playback.action === 'pause' ? 'Pause' : 'Resume')}
+          </button>}
         </section>
+        {playbackError && <p className="feedback" role="alert">{playbackError}</p>}
 
         {speaker.inputs?.length > 0 && <section className="sound" aria-labelledby="input-heading">
           <div className="sound-heading"><h2 id="input-heading">Input</h2>

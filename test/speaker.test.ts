@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { createSpeaker, parseInputChange, parseLevelChange } from '../src/speaker.ts';
+import { createSpeaker, parseInputChange, parseLevelChange, parsePlaybackChange, PlaybackConflict } from '../src/speaker.ts';
 
 test('builds Now Playing from the amplifier responses', async () => {
   const speaker = createSpeaker(async (command) => {
@@ -88,4 +88,74 @@ test('reports rejected commands and mismatched readback', async () => {
     return '{"vol":"20","mute":"0"}';
   });
   await assert.rejects(mismatching.change({ volume: 25 }), /confirm/i);
+});
+
+function playbackSpeaker(mode: string, states: Array<{ status: string; mode?: string; type?: string }>, reply: string | Error = 'OK') {
+  const writes: string[] = [];
+  let index = 0;
+  const speaker = createSpeaker(async (command) => {
+    if (command === 'getStatusEx') return '{"DeviceName":"Studio"}';
+    if (command === 'getPlayerStatus') {
+      return JSON.stringify({ type: '0', mode, ...states[Math.min(index++, states.length - 1)] });
+    }
+    writes.push(command);
+    if (reply instanceof Error) throw reply;
+    return reply;
+  });
+  return { speaker, writes };
+}
+
+test('accepts only explicit playback actions for a device-managed source', () => {
+  assert.deepEqual(parsePlaybackChange({ mode: '11', action: 'pause' }), { mode: '11', action: 'pause' });
+  for (const invalid of [null, {}, { action: 'resume' }, { mode: '10', action: 'onepause' },
+    { mode: '40', action: 'pause' }, { mode: 20, action: 'resume' }, { mode: '20', action: 'resume', other: true }]) {
+    assert.equal(parsePlaybackChange(invalid), null);
+  }
+});
+
+test('offers Pause or Resume only for playing or paused device-managed media', async () => {
+  for (const mode of ['10', '11', '20']) {
+    const { speaker } = playbackSpeaker(mode, [{ status: 'play' }, { status: 'pause' }, { status: 'stop' }, { status: 'load' }]);
+    assert.deepEqual((await speaker.read()).playback, { mode, action: 'pause' });
+    assert.deepEqual((await speaker.read()).playback, { mode, action: 'resume' });
+    assert.equal((await speaker.read()).playback, undefined);
+    assert.equal((await speaker.read()).playback, undefined);
+  }
+  for (const mode of ['0', '1', '2', '31', '32', '40', '41', '43', '45', '47', '51', '99', 'unknown']) {
+    const { speaker } = playbackSpeaker(mode, [{ status: 'play' }]);
+    assert.equal((await speaker.read()).playback, undefined);
+  }
+});
+
+test('checks fresh playback eligibility before writing, including stale source, group and status', async () => {
+  for (const initial of [{ status: 'play', mode: '11' }, { status: 'play', type: '1' }, { status: 'play', type: '?' }, { status: 'stop' }]) {
+    const { speaker, writes } = playbackSpeaker('10', [initial]);
+    await assert.rejects(speaker.setPlayback({ mode: '10', action: 'pause' }), PlaybackConflict);
+    assert.deepEqual(writes, []);
+  }
+  const { speaker, writes } = playbackSpeaker('10', [{ status: 'pause' }]);
+  assert.equal((await speaker.setPlayback({ mode: '10', action: 'pause' })).status, 'Paused');
+  assert.deepEqual(writes, []);
+});
+
+test('sends one explicit command and verifies its result even with delayed state and a lost acknowledgement', async () => {
+  const pause = playbackSpeaker('11', [{ status: 'play' }, { status: 'play' }, { status: 'pause' }], new Error('Connection closed'));
+  assert.equal((await pause.speaker.setPlayback({ mode: '11', action: 'pause' })).status, 'Paused');
+  assert.deepEqual(pause.writes, ['setPlayerCmd:pause']);
+  const resume = playbackSpeaker('20', [{ status: 'pause' }, { status: 'play' }]);
+  assert.equal((await resume.speaker.setPlayback({ mode: '20', action: 'resume' })).status, 'Playing');
+  assert.deepEqual(resume.writes, ['setPlayerCmd:resume']);
+});
+
+test('reports rejection, unconfirmed playback, and source or group changes during readback', async () => {
+  const rejected = playbackSpeaker('10', [{ status: 'play' }], 'FAIL');
+  await assert.rejects(rejected.speaker.setPlayback({ mode: '10', action: 'pause' }), /rejected/i);
+  for (const updated of [{ status: 'pause', mode: '11' }, { status: 'pause', type: '1' }]) {
+    const { speaker, writes } = playbackSpeaker('10', [{ status: 'play' }, updated]);
+    await assert.rejects(speaker.setPlayback({ mode: '10', action: 'pause' }), PlaybackConflict);
+    assert.deepEqual(writes, ['setPlayerCmd:pause']);
+  }
+  const unchanged = playbackSpeaker('11', [{ status: 'play' }]);
+  await assert.rejects(unchanged.speaker.setPlayback({ mode: '11', action: 'pause' }), /confirm/i);
+  assert.deepEqual(unchanged.writes, ['setPlayerCmd:pause']);
 });

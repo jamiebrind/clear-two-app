@@ -45,45 +45,57 @@ function median(values: number[]) {
   return (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.floor(sorted.length / 2)]) / 2;
 }
 
-export function analyzeSweep(samples: Float32Array, rate: number): ToneSettings {
-  if (rate < 16000 || samples.length < rate * sweepSeconds) throw new Error('The microphone capture was too short or used a low sample rate. Try again.');
-  if (samples.filter((sample) => Math.abs(sample) >= 0.985).length > rate * 0.002) {
-    throw new Error('The microphone clipped. Lower the speaker volume and start the measurements again.');
-  }
-
-  // A brief marker and gap identify when the amplifier actually started playback.
-  const block = Math.round(rate * 0.02);
-  const levels: number[] = [];
-  const searchEnd = samples.length - rate * (sweepSeconds - leadIn - 0.18);
-  for (let offset = 0; offset + block <= searchEnd; offset += block) levels.push(amplitude(samples, offset, block, marker, rate));
-  const floor = Math.max(0.000025, median(levels.slice(0, 12)) * 7);
-  let start = -1;
-  for (let i = 1; i + 17 < levels.length; i++) {
-    if (levels[i - 1] > floor || levels[i] <= floor) continue;
-    const peak = median(levels.slice(i + 2, i + 9));
-    if (peak > floor && median(levels.slice(i + 13, i + 18)) < peak * 0.28) {
-      start = (i - 1) * block;
-      break;
-    }
-  }
-  if (start < 0) throw new Error('Could not find the test sweep. Check that the speaker played it and try again.');
-
+function readTones(samples: Float32Array, rate: number, start: number): ToneSettings | null {
   let index = 0;
   const bands = {} as ToneSettings;
   for (const band of toneBands) {
     const readings: number[] = [];
     for (const frequency of tones[band]) {
-      const offset = start + Math.round(rate * (firstTone + step * index++ + 0.11));
+      const onset = start + Math.round(rate * (firstTone + step * index++));
+      const offset = onset + Math.round(rate * 0.11);
       const count = Math.round(rate * 0.22);
-      if (offset + count > samples.length) break;
+      if (offset + count > samples.length) return null;
       const signal = amplitude(samples, offset, count, frequency, rate);
       const nearby = Math.max(amplitude(samples, offset, count, frequency - 37, rate), amplitude(samples, offset, count, frequency + 37, rate));
-      if (signal > Math.max(0.000035, nearby * 4)) readings.push(20 * Math.log10(signal));
+      // A steady room tone also has narrow bandwidth. Check the same frequency
+      // during the quiet gap immediately before this probe.
+      const gap = Math.round(rate * 0.06);
+      const ambient = amplitude(samples, onset - gap, gap, frequency, rate);
+      if (!(signal > Math.max(0.000035, nearby * 4, ambient * 4))) return null;
+      readings.push(20 * Math.log10(signal));
     }
-    if (readings.length < 2) throw new Error('The sweep was too quiet or noisy. Move away from background noise and try again.');
     bands[band] = median(readings);
   }
   return bands;
+}
+
+export function analyzeSweep(samples: Float32Array, rate: number): ToneSettings {
+  if (!Number.isFinite(rate) || rate < 16000 || samples.length < rate * sweepSeconds) throw new Error('The microphone capture was too short or used a low sample rate. Try again.');
+  let clipped = 0;
+  for (const sample of samples) {
+    if (Math.abs(sample) >= 0.985 && ++clipped > rate * 0.002) {
+      throw new Error('The microphone clipped. Lower the speaker volume and start the measurements again.');
+    }
+  }
+
+  const block = Math.round(rate * 0.02);
+  const levels: number[] = [];
+  // Stop when there can no longer be nine measurable notes after the marker.
+  const lastReadEnd = firstTone + step * 8 + 0.33;
+  const searchEnd = Math.min(samples.length, samples.length - Math.round(rate * lastReadEnd) + 19 * block);
+  for (let offset = 0; offset + block <= searchEnd; offset += block) levels.push(amplitude(samples, offset, block, marker, rate));
+  const floor = Math.max(0.000025, median(levels.slice(0, 12)) * 7);
+  let foundMarker = false;
+  for (let i = 1; i + 17 < levels.length; i++) {
+    if (levels[i - 1] > floor || levels[i] <= floor) continue;
+    const peak = median(levels.slice(i + 2, i + 9));
+    if (peak <= floor || median(levels.slice(i + 13, i + 18)) >= peak * 0.28) continue;
+    foundMarker = true;
+    const bands = readTones(samples, rate, (i - 1) * block);
+    if (bands) return bands;
+  }
+  if (foundMarker) throw new Error('The sweep was too quiet or noisy. Move away from background noise and try again.');
+  throw new Error('Could not find the test sweep. Check that the speaker played it and try again.');
 }
 
 export function recommendTuning(measurements: ToneSettings[], original: ToneSettings): ToneSettings {
@@ -94,7 +106,7 @@ export function recommendTuning(measurements: ToneSettings[], original: ToneSett
     if (Math.max(...offsets) - Math.min(...offsets) > 10) {
       throw new Error('The measurements didn’t agree. Start again and keep the phone pointed the same way near your seat.');
     }
-    const cut = Math.min(3, Math.max(0, Math.round((median(offsets) - 1.5) * 0.65)));
+    const cut = Math.min(3, Math.max(0, Math.round((Math.min(...offsets) - 1.5) * 0.65)));
     result[band] = Math.max(-10, original[band] - cut);
   }
   return result;

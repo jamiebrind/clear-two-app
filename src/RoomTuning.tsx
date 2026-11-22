@@ -29,7 +29,7 @@ export function RoomTuning({ roomId, online, onEqChange }: { roomId?: string; on
   const [error, setError] = useState('');
   const [restart, setRestart] = useState(false);
   const capture = useRef<AbortController | null>(null);
-  const baseline = useRef<ToneSettings | null>(null);
+  const baseline = useRef<{ tone: ToneSettings; volume: number; mic: string | undefined } | null>(null);
   const canRecord = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia) && typeof AudioWorkletNode !== 'undefined';
 
   useEffect(() => () => capture.current?.abort(), []);
@@ -42,20 +42,30 @@ export function RoomTuning({ roomId, online, onEqChange }: { roomId?: string; on
     setError('');
     setNotice('');
     try {
-      const result = await captureSweep(async () => {
+      const result = await captureSweep(async (mic) => {
         const current = await requestJson<ToneSettings>(`/api/speaker/tone${query}`);
         controller.signal.throwIfAborted();
-        if (baseline.current && !same(current, baseline.current)) {
+        const previous = baseline.current;
+        if (previous && (!same(current, previous.tone) || previous.mic !== mic)) {
           setRestart(true);
-          throw new Error('The speaker EQ changed between measurements. Start over with the current settings.');
+          throw new Error('The EQ or microphone changed between measurements. Start over with the current setup.');
         }
-        baseline.current = current;
-        await requestJson(`/api/tuning/measure${query}`, {}, 13000);
+        const { volume } = await requestJson<{ volume: number }>(`/api/tuning/measure${query}`,
+          previous ? { expectedVolume: previous.volume } : {}, 13000);
+        controller.signal.throwIfAborted();
+        if (!Number.isInteger(volume) || volume < 1 || volume > tuningVolumeLimit) {
+          throw new Error('The bridge could not confirm the measurement volume. Check the bridge version and try again.');
+        }
+        if (previous && previous.volume !== volume) {
+          setRestart(true);
+          throw new Error('The volume changed between measurements. Start over at a consistent volume.');
+        }
+        baseline.current = { tone: current, volume, mic };
       }, controller.signal);
       const next = [...measurements, result];
       if (next.length === 3 && baseline.current) {
         try {
-          const original = baseline.current;
+          const original = baseline.current.tone;
           setProfile({ original, tuned: recommendTuning(next, original) });
         } catch (error) {
           setRestart(true);
@@ -114,15 +124,16 @@ export function RoomTuning({ roomId, online, onEqChange }: { roomId?: string; on
     <summary>Room tuning <span className="tuning-tag">Experimental</span><ChevronDown size={18} aria-hidden="true" /></summary>
     <div className="tone-body tuning" aria-busy={applying}>
       {!profile && <>
-        <p>Ungroup the speaker, select Wi-Fi / Network, pause or stop playback, and set the speaker volume to 1–{tuningVolumeLimit}%. The test sweep can replace the current queue.</p>
+        <p>Ungroup the speaker, select Wi-Fi / Network, pause or stop playback, and keep the speaker at the same volume (1–{tuningVolumeLimit}%) for all three positions. The test sweep can replace the current queue.</p>
         <p>{recording ? 'Measuring. Keep the microphone still until the sweep finishes.' : `Position ${measurements.length + 1} of 3. Hold the microphone at ear height ${positionPrompts[measurements.length]}.`}</p>
+        {!recording && <p>Keep the microphone pointed the same way. A cut is suggested only when bass or treble measures high relative to the midrange at all three positions.</p>}
         {!canRecord && <p className="feedback" role="status">Open Clear Two over trusted HTTPS on your phone, or use localhost on the bridge computer, to enable the microphone.</p>}
         {recording ? <button className="mute" type="button" onClick={() => capture.current?.abort()}>Cancel measurement</button>
           : <button className="primary" type="button" disabled={!online || !canRecord || restart} onClick={() => void measure()}>Measure position</button>}
         {!recording && (measurements.length > 0 || restart) && <button className="mute" type="button" onClick={startOver}>Start over</button>}
       </>}
       {profile && <>
-        <p>{same(profile.original, profile.tuned) ? 'The measurements did not suggest an EQ change.' : 'Compare the original and tuned EQ while listening to the same audio.'}</p>
+        <p>{same(profile.original, profile.tuned) ? 'The measurements did not suggest an EQ change.' : 'Compare both settings with familiar music at the same volume.'}</p>
         <table className="tuning-result"><thead><tr><th scope="col">Band</th><th scope="col">Original</th><th scope="col">Tuned</th></tr></thead>
           <tbody>{toneBands.map((band) => <tr key={band}><th scope="row">{band}</th><td>{gain(profile.original[band])}</td><td>{gain(profile.tuned[band])}</td></tr>)}</tbody>
         </table>

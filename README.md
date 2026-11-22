@@ -25,9 +25,9 @@ The bridge accepts setup requests on loopback. Wi-Fi credentials are used for th
 
 ## Current scope
 
-- Now Playing shows source, playback state and available track metadata. It falls back to the source for inputs like USB DAC.
+- Now Playing shows source, playback state and available track metadata. For active device-managed network tracks, URL streams and USB-drive playback, use **Pause** or **Resume**. A grouped guest follows its host. External audio inputs retain their source display and volume controls.
 - The **Input** panel shows the amplifier’s active input and lets you switch between Wi-Fi / Network, Aux, Bluetooth, USB Drive and USB DAC on an Amp V4. Optical, coaxial and Aux 2 appear when the firmware advertises them. A guest follows its host’s input. The bridge checks the reported input after sending a change.
-- **Rooms** lists the saved speakers. **Scan network** adds compatible Amp V4 units found over UPnP/SSDP. For speakers missed by the scan, use the address option under **Add a speaker**.
+- **Rooms** lists the saved speakers and remembers the last selection in this browser. On a phone, use **Choose room** to switch. **Scan network** reports how many compatible amps responded and saves newly discovered rooms. For speakers missed by the scan, use the address option under **Add speaker** on the bridge computer.
 - To start a group, open the room you want as host, then use **Group playback → Add room** to add a speaker. To start a second group, open a different standalone room and add another standalone speaker. A speaker can belong to one group at a time. From the host room you can remove guests, ungroup, set all volumes, and adjust guest volume or mute. Two separate groups have been exercised with four simulated speakers. Physical multiroom playback still needs verification.
 - Volume and mute use explicit HTTP commands. The bridge reads the speaker back after each change. Volume changes require pressing **Set volume**.
 - Opening **Tone controls** reads the amplifier’s bass, mid and treble over TCP. Each slider sends its setting only after **Apply** and checks the setting again over TCP. These are the amplifier’s tone controls.
