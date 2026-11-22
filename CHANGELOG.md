@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0
+
+- Added a per-room input selector with amplifier readback. Optional digital and secondary analog inputs come from the speaker’s capability report.
+- Group guests show that they follow their host’s input. Input changes are sent once and verified even when the acknowledgement is lost.
+- Verified that changing or ungrouping one of two simulated groups leaves the other group intact.
+
 ## v0.3.0
 
 - Added a responsive Rooms view, speaker discovery, and saved room selection by hardware ID.

@@ -1,3 +1,23 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
+import { inputLabels, type InputId } from './inputs.ts';
+
+const inputCommands: Record<InputId, string> = {
+  wifi: 'wifi', aux: 'line-in', bluetooth: 'bluetooth', 'usb-drive': 'udisk',
+  'usb-dac': 'PCUSB', optical: 'optical', coaxial: 'co-axial', 'aux-2': 'line-in2',
+};
+const inputBits: Record<Exclude<InputId, 'wifi'>, number> = {
+  aux: 1, bluetooth: 2, 'usb-drive': 3, 'usb-dac': 15, optical: 4, coaxial: 6, 'aux-2': 8,
+};
+const playbackInputs: Record<string, InputId> = {
+  '0': 'wifi', '1': 'wifi', '2': 'wifi', '10': 'wifi', '20': 'wifi', '31': 'wifi', '32': 'wifi',
+  '11': 'usb-drive', '40': 'aux', '41': 'bluetooth', '43': 'optical',
+  '45': 'coaxial', '47': 'aux-2', '51': 'usb-dac',
+};
+const ampV4Inputs = new Set<InputId>(['aux', 'bluetooth', 'usb-drive', 'usb-dac']);
+
+export class InputConflict extends Error {}
+
 export interface SpeakerState {
   name: string;
   model: string | null;
@@ -8,6 +28,9 @@ export interface SpeakerState {
   muted: boolean | null;
   title: string | null;
   artist: string | null;
+  input: InputId | null;
+  inputs: InputId[];
+  groupGuest: boolean;
 }
 
 export type LevelChange = { volume: number } | { mute: boolean };
@@ -15,7 +38,7 @@ export type SendCommand = (command: string) => Promise<string>;
 
 const sources: Record<string, string> = {
   '0': 'Idle', '1': 'AirPlay', '2': 'DLNA', '10': 'Network', '11': 'USB storage',
-  '20': 'Network stream', '31': 'Spotify Connect', '40': 'Line in', '41': 'Bluetooth',
+  '20': 'Network stream', '31': 'Spotify Connect', '32': 'TIDAL Connect', '40': 'Line in', '41': 'Bluetooth',
   '43': 'Optical', '45': 'Coaxial', '47': 'Line in 2', '51': 'USB DAC', '99': 'Grouped playback',
 };
 const statuses: Record<string, string> = { play: 'Playing', pause: 'Paused', stop: 'Stopped', idle: 'Idle' };
@@ -54,26 +77,48 @@ export function parseLevelChange(body: unknown): LevelChange | null {
   return null;
 }
 
+export function parseInputChange(body: unknown): InputId | null {
+  if (!body || typeof body !== 'object' || Object.keys(body).length !== 1 || !('input' in body)) return null;
+  return typeof body.input === 'string' && Object.hasOwn(inputLabels, body.input) ? body.input as InputId : null;
+}
+
+function supportedInputs(model: string | null, value: unknown): InputId[] {
+  const raw = String(value);
+  const mask = /^(?:0x[0-9a-f]{1,8}|\d{1,10})$/i.test(raw) ? Number(raw) : 0;
+  return (Object.keys(inputLabels) as InputId[]).filter((input) =>
+    input === 'wifi' || (model === 'UP2STREAM_AMP_V4' && ampV4Inputs.has(input)) || Boolean(mask & (1 << inputBits[input])));
+}
+
 export function createSpeaker(send: SendCommand) {
   async function read(): Promise<SpeakerState> {
     const [device, player] = await Promise.all([
       send('getStatusEx').then(parseObject),
       send('getPlayerStatus').then(parseObject),
     ]);
+    return speakerState(device, player);
+  }
+
+  function speakerState(device: Record<string, unknown>, player: Record<string, unknown>): SpeakerState {
     const name = text(device.DeviceName);
     if (!name) throw new Error('The amplifier did not report a device name.');
 
     const mute = String(player.mute);
+    const mode = String(player.mode);
+    const groupGuest = String(player.type) === '1' || mode === '99';
+    const model = text(device.project);
     return {
       name,
-      model: text(device.project),
+      model,
       firmware: text(device.firmware),
-      source: sources[String(player.mode)] ?? 'Unknown source',
+      source: groupGuest ? 'Grouped playback' : (Object.hasOwn(sources, mode) ? sources[mode] : 'Unknown source'),
       status: statuses[String(player.status)] ?? 'Status unavailable',
       volume: parseVolume(player.vol),
       muted: mute === '1' ? true : mute === '0' ? false : null,
       title: metadata(player.Title),
       artist: metadata(player.Artist),
+      input: !groupGuest && Object.hasOwn(playbackInputs, mode) ? playbackInputs[mode] : null,
+      inputs: supportedInputs(model, device.plm_support),
+      groupGuest,
     };
   }
 
@@ -89,5 +134,26 @@ export function createSpeaker(send: SendCommand) {
     return state;
   }
 
-  return { read, change };
+  async function switchInput(input: InputId): Promise<SpeakerState> {
+    const readPlayer = () => send('getPlayerStatus').then(parseObject);
+    const [device, player] = await Promise.all([send('getStatusEx').then(parseObject), readPlayer()]);
+    const before = speakerState(device, player);
+    if (before.groupGuest) throw new InputConflict('Change the input in the host room.');
+    if (!before.inputs.includes(input)) throw new InputConflict('This speaker does not report support for that input.');
+    if (before.input === input) return before;
+
+    const acknowledgement = await send(`setPlayerCmd:switchmode:${inputCommands[input]}`).catch(() => null);
+    if (acknowledgement !== null && acknowledgement.trim() !== 'OK') throw new Error('The amplifier rejected the input change.');
+    for (const wait of [0, 300, 600]) {
+      if (wait) await delay(wait);
+      const updated = await readPlayer().catch(() => null);
+      if (!updated) continue;
+      const state = speakerState(device, updated);
+      if (state.groupGuest) throw new InputConflict('This room joined a group. Change the input in the host room.');
+      if (state.input === input) return state;
+    }
+    throw new Error('Could not confirm the input change. Check the selected input before trying again.');
+  }
+
+  return { read, change, switchInput };
 }

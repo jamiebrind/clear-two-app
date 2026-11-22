@@ -5,8 +5,9 @@ import { requestJson } from './client.ts';
 import { ToneControls } from './ToneControls.tsx';
 import { SpeakerSetup } from './SpeakerSetup.tsx';
 import { GroupControls } from './GroupControls.tsx';
+import { inputLabels, type InputId } from './inputs.ts';
 import type { RoomSummary } from './rooms.ts';
-import type { LevelChange, SpeakerState } from './speaker.ts';
+import type { SpeakerState } from './speaker.ts';
 import './styles.css';
 
 const roomsEndpoint = '/api/rooms';
@@ -149,20 +150,18 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('connecting');
   const [connectionError, setConnectionError] = useState('');
   const [controlError, setControlError] = useState('');
+  const [inputError, setInputError] = useState('');
   const [draft, setDraft] = useState<number | null>(null);
+  const [inputDraft, setInputDraft] = useState<InputId | null>(null);
   const [working, setWorking] = useState(false);
   const reading = useRef<Promise<SpeakerState> | null>(null);
   const changing = useRef(false);
   const legacy = room.id === legacyRoomId;
   const query = legacy ? '' : `?room=${encodeURIComponent(room.id)}`;
 
-  const requestSpeaker = (level?: LevelChange) => requestJson<SpeakerState>(
-    `${level ? '/api/speaker/level' : '/api/speaker'}${query}`, level,
-  );
-
   async function refresh() {
     if (reading.current || changing.current) return;
-    reading.current = requestSpeaker();
+    reading.current = requestJson<SpeakerState>(`/api/speaker${query}`);
     try {
       setSpeaker(await reading.current);
       setConnection('online');
@@ -183,30 +182,34 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function applyLevel(level: LevelChange) {
+  async function applySetting(setting: 'input' | 'level', value: object) {
     if (changing.current || connection !== 'online') return;
     changing.current = true;
     setWorking(true);
-    setControlError('');
+    const setError = setting === 'input' ? setInputError : setControlError;
+    setError('');
     let failed = false;
     try {
       await reading.current?.catch(() => {});
-      setSpeaker(await requestSpeaker(level));
+      setSpeaker(await requestJson<SpeakerState>(`/api/speaker/${setting}${query}`, value, setting === 'input' ? 15000 : 7500));
       setConnection('online');
       setConnectionError('');
     } catch (error) {
       failed = true;
-      setControlError(error instanceof Error ? error.message : 'Could not confirm the new setting.');
+      setError(error instanceof Error ? error.message : 'Could not confirm the new setting.');
     } finally {
       changing.current = false;
       setWorking(false);
-      if ('volume' in level) setDraft(null);
+      if (setting === 'input') setInputDraft(null);
+      if ('volume' in value) setDraft(null);
       if (failed) void refresh();
     }
   }
 
   const volume = draft ?? speaker?.volume;
   const disabled = connection !== 'online' || working;
+  const selectedInput = inputDraft ?? speaker?.input;
+  const pickerValue = selectedInput && speaker?.inputs?.includes(selectedInput) ? selectedInput : '';
   const connectionLabel = { connecting: 'Connecting', online: 'Connected', offline: 'Offline' }[connection];
 
   return (
@@ -228,13 +231,31 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
           {speaker?.title && <span className="playing-status">{speaker.status}</span>}
         </section>
 
+        {speaker.inputs?.length > 0 && <section className="sound" aria-labelledby="input-heading">
+          <div className="sound-heading"><h2 id="input-heading">Input</h2>
+            <span className="active-input" role="status">{speaker.groupGuest ? 'From group host' : speaker.input ? inputLabels[speaker.input] : 'Unknown'}</span>
+          </div>
+          {speaker.groupGuest ? <p className="input-hint">Change the input in the host room.</p> : <form className="input-picker" onSubmit={(event) => {
+            event.preventDefault();
+            if (pickerValue && pickerValue !== speaker.input) void applySetting('input', { input: pickerValue });
+          }}>
+            <select aria-label="Choose input" disabled={disabled} value={pickerValue}
+              onChange={(event) => { setInputDraft(event.target.value as InputId); setInputError(''); }}>
+              <option value="" disabled>Choose input</option>
+              {speaker.inputs.map((input) => <option key={input} value={input}>{inputLabels[input]}</option>)}
+            </select>
+            <button className="primary" disabled={disabled || !pickerValue || pickerValue === speaker.input}>Change input</button>
+          </form>}
+          {inputError && <p className="feedback" role="alert">{inputError}</p>}
+        </section>}
+
         <section className="sound" aria-labelledby="sound">
-          <div className="sound-heading"><h2 id="sound">Sound</h2><button className="mute" type="button" onClick={() => void applyLevel({ mute: !speaker?.muted })} disabled={disabled || speaker?.muted == null}>
+          <div className="sound-heading"><h2 id="sound">Sound</h2><button className="mute" type="button" onClick={() => void applySetting('level', { mute: !speaker?.muted })} disabled={disabled || speaker?.muted == null}>
             {speaker?.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}{speaker?.muted ? 'Unmute' : 'Mute'}
           </button></div>
           <label htmlFor="volume">Volume<span>{volume == null ? 'Unavailable' : `${volume}%`}</span></label>
           <input id="volume" type="range" min="0" max="100" value={volume ?? 0} onChange={(event) => setDraft(Number(event.target.value))} disabled={disabled || speaker?.volume == null} />
-          <div className="volume-actions"><button type="button" className="primary" disabled={disabled || draft === null || draft === speaker?.volume} onClick={() => { if (draft !== null) void applyLevel({ volume: draft }); }}>Set volume</button></div>
+          <div className="volume-actions"><button type="button" className="primary" disabled={disabled || draft === null || draft === speaker?.volume} onClick={() => { if (draft !== null) void applySetting('level', { volume: draft }); }}>Set volume</button></div>
           {controlError && <p className="feedback" role="alert">{controlError}</p>}
         </section>
 

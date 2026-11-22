@@ -89,3 +89,40 @@ test('an unavailable guest does not turn a partially applied group level into su
   assert.equal(guestWrites, 1);
   assert.equal((await engine.read(host)).hostVolume, 25);
 });
+
+test('two hosts manage separate groups and cannot take each other’s guests', async () => {
+  const otherHost = '192.0.2.20';
+  const otherGuest = '192.168.8.21';
+  const otherId = 'FF31F09E8AFCEBECAF8BF250';
+  const devices = new Map([
+    [guest, { uuid: id, ip: guest, name: 'Office', volume: 20, mute: 0 }],
+    [otherGuest, { uuid: otherId, ip: otherGuest, name: 'Bedroom', volume: 40, mute: 0 }],
+  ]);
+  const hostsByGuest = new Map<string, string>();
+  const engine = createGroup(async (ip, command) => {
+    if (command === 'getPlayerStatus') return JSON.stringify({ type: hostsByGuest.has(ip) ? 1 : 0, vol: 30 });
+    if (command === 'multiroom:getSlaveList') {
+      const members = [...devices.values()].filter((device) => hostsByGuest.get(device.ip) === ip);
+      return JSON.stringify({ slaves: members.length, slave_list: members });
+    }
+    const join = /^ConnectMasterAp:JoinGroupMaster:eth([^:]+):wifi0\.0\.0\.0$/.exec(command);
+    if (join) { hostsByGuest.set(ip, join[1]); return 'OK'; }
+    if (command === `multiroom:SlaveVolume:${guest}:25` && ip === host) {
+      devices.get(guest)!.volume = 25;
+      return 'OK';
+    }
+    if (command === 'multiroom:Ungroup' && ip === host) {
+      hostsByGuest.delete(guest);
+      return 'OK';
+    }
+    assert.fail(`${ip} ${command}`);
+  });
+
+  await engine.change(host, { action: 'join', memberId: id }, guest);
+  await engine.change(otherHost, { action: 'join', memberId: otherId }, otherGuest);
+  await assert.rejects(engine.change(host, { action: 'join', memberId: otherId }, otherGuest), /current group/i);
+  assert.equal((await engine.change(host, { action: 'volume', memberId: id, volume: 25 })).members[0].volume, 25);
+  assert.deepEqual((await engine.change(host, { action: 'ungroup' })).members, []);
+  assert.deepEqual((await engine.read(otherHost)).members, [{ id: otherId, name: 'Bedroom', volume: 40, muted: false }]);
+  assert.equal((await engine.read(otherGuest)).isGuest, true);
+});

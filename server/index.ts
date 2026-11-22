@@ -3,7 +3,7 @@ import { isIPv4 } from 'node:net';
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import { createSpeaker, parseLevelChange } from '../src/speaker.ts';
+import { createSpeaker, InputConflict, parseInputChange, parseLevelChange } from '../src/speaker.ts';
 import { createToneController, parseToneChange } from './tone.ts';
 import { createSetup, localAddress, validUuid } from './setup.ts';
 import { discoverSpeakers } from './discovery.ts';
@@ -218,9 +218,9 @@ app.post('/api/setup/add', setupJson, async (request, response) => {
 });
 
 function writeFailure(response: express.Response, error: unknown, message: string) {
-  const status = error instanceof GroupConflict ? 409 : 502;
-  const detail = error instanceof GroupConflict || error instanceof RoomUnavailable || (error instanceof Error && /^The amplifier |^Could not confirm/.test(error.message));
-  response.status(status).json({ error: detail ? (error as Error).message : message });
+  const conflict = error instanceof GroupConflict || error instanceof InputConflict;
+  const detail = conflict || error instanceof RoomUnavailable || (error instanceof Error && /^The amplifier |^Could not confirm/.test(error.message));
+  response.status(conflict ? 409 : 502).json({ error: detail ? error.message : message });
 }
 
 app.post('/api/speaker/level', express.json({ limit: '1kb' }), async (request, response) => {
@@ -235,6 +235,23 @@ app.post('/api/speaker/level', express.json({ limit: '1kb' }), async (request, r
     response.json(await mutate([selected], async () => configuredSpeaker((await verifyRoom(selected)).address).change(level)));
   } catch (error) {
     writeFailure(response, error, 'Could not confirm the change. Refresh to check the current setting.');
+  }
+});
+
+app.post('/api/speaker/input', express.json({ limit: '1kb' }), async (request, response) => {
+  const input = parseInputChange(request.body);
+  if (!input) { response.status(400).json({ error: 'Choose a valid input.' }); return; }
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
+  try {
+    const state = await mutate([selected], async () => {
+      const deadline = AbortSignal.timeout(12500);
+      const room = await verifyRoom(selected, deadline);
+      return createSpeaker((command) => requestDevice(room.address, command, deadline)).switchInput(input);
+    }, true);
+    response.json(state);
+  } catch (error) {
+    writeFailure(response, error, 'Could not confirm the input change. Check the selected input before trying again.');
   }
 });
 
