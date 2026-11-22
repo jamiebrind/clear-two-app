@@ -4,3 +4,5 @@ dist/
 .env
 .env.*
 !.env.example
+speaker.local.json
+speaker.local.json.tmp

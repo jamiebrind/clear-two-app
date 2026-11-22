@@ -3,12 +3,14 @@ import { createRoot } from 'react-dom/client';
 import { AudioLines, ChevronDown, RefreshCw, Volume2, VolumeX } from 'lucide-react';
 import { requestJson } from './client.ts';
 import { ToneControls } from './ToneControls.tsx';
+import { SpeakerSetup } from './SpeakerSetup.tsx';
 import type { LevelChange, SpeakerState } from './speaker.ts';
 import './styles.css';
 
 const requestSpeaker = (level?: LevelChange) => requestJson<SpeakerState>(level ? '/api/speaker/level' : '/api/speaker', level);
 
 function App() {
+  const [showSetup, setShowSetup] = useState(() => new URLSearchParams(window.location.search).has('setup'));
   const [speaker, setSpeaker] = useState<SpeakerState>();
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('connecting');
   const [connectionError, setConnectionError] = useState('');
@@ -34,12 +36,13 @@ function App() {
   }
 
   useEffect(() => {
+    if (showSetup) return;
     void refresh();
     const timer = window.setInterval(() => {
       if (!document.hidden) void refresh();
     }, 4000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [showSetup]);
 
   async function applyLevel(level: LevelChange) {
     if (changing.current || connection !== 'online') return;
@@ -66,17 +69,23 @@ function App() {
     <main>
       <header className="masthead">
         <div className="brand"><span className="brand-mark"><AudioLines size={19} aria-hidden="true" /></span>Clear Two</div>
-        <div className={`connection ${connection}`} role="status"><span aria-hidden="true" />{connectionLabel}</div>
+        {!showSetup && <div className={`connection ${connection}`} role="status"><span aria-hidden="true" />{connectionLabel}</div>}
       </header>
 
-      <section className="room">
+      {showSetup ? <SpeakerSetup onClose={() => {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('setup');
+        window.history.replaceState(null, '', url);
+        setShowSetup(false);
+      }} /> : <section className="room">
         <div className="room-heading">
           <h1>{speaker?.name ?? 'Your speaker'}</h1>
           <button type="button" className="icon-button" onClick={() => void refresh()} aria-label="Refresh speaker status" title="Refresh speaker status" disabled={working}><RefreshCw size={18} /></button>
         </div>
         {connectionError && <p className="feedback" role="status">{connectionError}</p>}
+        {!speaker && <button className="primary setup-entry" type="button" onClick={() => setShowSetup(true)}>Add a speaker</button>}
 
-        <section className="playing" aria-labelledby="now-playing">
+        {speaker && <><section className="playing" aria-labelledby="now-playing">
           <div className="source-icon"><AudioLines size={32} strokeWidth={1.6} aria-hidden="true" /></div>
           <div className="now-playing">
             <h2 id="now-playing">Now playing</h2>
@@ -100,7 +109,8 @@ function App() {
         {speaker && <details className="device"><summary>Device information <ChevronDown size={18} aria-hidden="true" /></summary>
           <dl><div><dt>Board</dt><dd>{speaker.model ?? 'Unavailable'}</dd></div><div><dt>Network firmware</dt><dd>{speaker.firmware ?? 'Unavailable'}</dd></div></dl>
         </details>}
-      </section>
+        <button type="button" className="setup-entry mute" onClick={() => setShowSetup(true)}>Add a speaker</button></>}
+      </section>}
     </main>
   );
 }
