@@ -4,6 +4,8 @@ This review targets the A31 Up2Stream Amp V4. The goal is a Clear Two app that c
 
 ## Product assessment, November 2026
 
+**v0.7 update.** The native apps now bundle the controller, store rooms on the phone, and use local HTTP, SSDP and TCP. First-time setup and room tuning have direct mobile paths. The v0.6 assessment below records the earlier bridge dependency. The mobile release gate is now testing onboarding, network permissions, playback and tuning on physical phones and amps, with signed builds. Apple approval for multicast discovery is a separate distribution dependency; manual IP entry works independently.
+
 **Release decision: continue as a developer preview.** An owner with a configured Amp V4 and a running bridge can select a room, control its input, and adjust its sound. A customer unpacking a speaker with only a phone still cannot go from first launch to music independently. Closing that gap would improve the product more than another DSP control.
 
 Sonos gives the listener a selected room or group on launch and keeps the playback target visible. For Clear Two, the corresponding everyday tests are opening the last room, seeing what is playing, controlling it, and finding another room without losing track of the first. This build adds a compact phone room picker, remembers the room per browser, and gives explicit room links precedence. [Sonos room selection](https://support.sonos.com/en/article/sort-products-in-the-sonos-app) · [Sonos grouping](https://support.sonos.com/en-gb/article/group-and-ungroup-rooms)

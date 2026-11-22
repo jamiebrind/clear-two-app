@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.0
+
+- Added iOS and Android app projects with direct LAN control, on-device room storage, Wi-Fi setup and input, playback, and group controls.
+- Moved tone control and experimental sweep delivery onto the phone. The web bridge remains optional.
+- Added a static web build with direct HTTP control by IP for compatible browsers and firmware.
+
 ## v0.6.0
 
 - Added pause and resume to Now Playing for device-managed network tracks, URL streams and USB drives. The bridge verifies the room, source and reported state.

@@ -1,10 +1,22 @@
 # Clear Two speaker app
 
-Clear Two is a React and TypeScript controller for Up2Stream Amp V4 speakers. The Node bridge serves the web UI and sends commands over the local network. See the [replacement review](REVIEW.md) for verified features and the work left before v1.0.
+Clear Two controls an Up2Stream Amp V4 directly from its iOS and Android apps over local Wi-Fi. The React and TypeScript interface also runs in a browser. Each phone stores its own room list and communicates with the amplifier using its local address. See the [replacement review](REVIEW.md) for the remaining release checks.
 
 Development updates are committed and pushed to `main`. Notable builds get a `v0.x.y` Git tag and an entry in the [changelog](CHANGELOG.md). Smaller fixes bump the patch version. `v1.0.0` is reserved for the first public release.
 
-## Run on Windows
+## Use a phone without a desktop bridge
+
+Install the Android development APK or a signed iOS build. Connect the phone to the same network as the amplifier and allow local network access when prompted. Choose **Scan network**, or **Add speaker → Add by IP address**. Clear Two verifies the amplifier's hardware ID and remembers the room on that phone.
+
+To connect a new Amp V4, use **Add speaker → Connect to Wi-Fi**. Join the amp’s temporary Wi-Fi network, return to Clear Two, choose the home network, then reconnect the phone to home Wi-Fi to verify the amp. On iOS, **Join speaker Wi-Fi** requests the system hotspot prompt. Wi-Fi settings are also available for a manual join. If discovery misses the amp, supply its address from your router. iOS multicast discovery on a physical device requires an Apple-approved multicast entitlement and matching signing profile.
+
+For development, run `npm ci` then `npm run mobile:sync`. Open Android Studio with `npx cap open android`, or use `npx cap open ios` on a Mac with Xcode. Set your signing team before installing on a physical iPhone. The iOS project uses the Hotspot Configuration capability. With an approved multicast profile, set the Xcode build setting `CLEAR_TWO_ENTITLEMENTS=Multicast`. The development bundle identifier is `com.cleartwo.controller`. Android CI produces a debug APK; store distribution requires release signing.
+
+## Standalone web app
+
+Run `npm run build:web` and serve `dist-web/` with a static web server. In this build **Add speaker** uses its local IP address directly. Browser security and firmware CORS headers determine whether the browser can read the amp over plain HTTP. The direct browser supports HTTP playback, inputs, level and groups. SSDP discovery, TCP tone settings and serving the room-tuning sweep require the installed app or the optional bridge. In the bridge web UI, **Connect directly by IP** selects the same browser transport.
+
+## Optional Windows bridge
 
 From this directory with Node.js 24 or newer, run:
 
@@ -17,7 +29,7 @@ npm.cmd start
 
 Open `http://127.0.0.1:4273`. Use `npm.cmd run dev` during development. To access the app from a phone on the same network, set `CLEAR_TWO_HOST` in `.env` to this PC’s LAN IPv4 address and open that address on port `4273` from the phone. LAN mode is intended for a trusted private network. The bridge accepts controls from browsers that can open that local address. You can optionally set a starting speaker’s IP with `CLEAR_TWO_SPEAKER_IP`.
 
-## Set up an Amp V4
+## Set up an Amp V4 through the optional bridge
 
 Open **Add a speaker** on the computer running Clear Two. When the amp is in Wi-Fi pairing mode, use the computer’s Wi-Fi settings to join the amp’s temporary hotspot. Clear Two reads the amp’s network list and sends the selected 2.4 GHz WPA2 or open network settings. Rejoin your home network when prompted and let Clear Two find the amp, or enter its new IP if discovery misses it. Clear Two verifies the same hardware ID before saving the speaker. An amp already on Ethernet can be added by its local IP.
 
@@ -32,13 +44,13 @@ The bridge accepts setup requests on loopback. Wi-Fi credentials are used for th
 - Volume and mute use explicit HTTP commands. The bridge reads the speaker back after each change. Volume changes require pressing **Set volume**.
 - Opening **Tone controls** reads the amplifier’s bass, mid and treble over TCP. Each slider sends its setting only after **Apply** and checks the setting again over TCP. These are the amplifier’s tone controls.
 - The UI polls HTTP while visible. The Amp V4's dedicated TCP mute query disagreed with HTTP and UART passthrough during hardware checks.
-- Browser delivery is implemented. Native iOS and Android packaging will use Capacitor and a direct LAN transport. UPnP queue access, stereo pairing, and ACPWorkbench profile recall are future increments.
+- The native apps bundle their interface and use local HTTP, SSDP and TCP. UPnP queue access, stereo pairing, and ACPWorkbench profile recall are future increments.
 
 [Arylic HTTP playback reference](https://developer.arylic.com/httpapi/#playback-control)
 
 ## Experimental room tuning
 
-Open **Room tuning** on a standalone speaker. Pause or stop playback, select **Wi-Fi / Network**, and unmute the speaker at 1–25% volume. The bridge must listen on its LAN IP so the amplifier can fetch the test sweep. Playing the sweep can replace the current queue.
+Open **Room tuning** on a standalone speaker. Pause or stop playback, select **Wi-Fi / Network**, and unmute the speaker at 1–25% volume. In the installed app, the phone serves the short-lived test sweep to the selected amplifier over Wi-Fi. For bridge users, the bridge must listen on its LAN IP. Playing the sweep can replace the current queue.
 
 Take three measurements at ear height around your listening position. The browser asks for microphone permission and analyses the samples locally. If the capture is too noisy, clips, or disagrees with the other positions, repeat the measurement as prompted. The experiment measures bass, mid and treble ranges and can reduce excessive bass or treble by up to 3 dB. It uses midrange as a reference and has no phone-specific calibration. Applying a suggested EQ saves the original values in the browser for **Restore original** after reloading.
 

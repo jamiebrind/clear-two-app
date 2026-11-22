@@ -7,3 +7,7 @@ dist-web/
 !.env.example
 speaker.local.json
 speaker.local.json.tmp
+*.p12
+*.mobileprovision
+*.keystore
+*.jks

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Clear Two</string>
+    <string name="title_activity_main">Clear Two</string>
+    <string name="package_name">com.cleartwo.controller</string>
+    <string name="custom_url_scheme">com.cleartwo.controller</string>
+</resources>
