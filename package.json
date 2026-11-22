@@ -1,24 +1,30 @@
 {
   "name": "clear-two-app",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --env-file-if-exists=.env server/index.ts --dev",
     "start": "node --env-file-if-exists=.env server/index.ts",
     "build": "tsc --noEmit && vite build",
+    "build:web": "tsc --noEmit && vite build --mode standalone --outDir dist-web",
+    "mobile:sync": "npm run build && cap sync",
     "test": "node --test test/*.test.ts"
   },
   "engines": {
     "node": ">=24"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.2",
+    "@capacitor/core": "^8.6.2",
+    "@capacitor/ios": "^8.6.2",
     "express": "^5.3.0",
     "lucide-react": "^1.77.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.2",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",

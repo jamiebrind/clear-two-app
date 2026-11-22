@@ -1,4 +1,4 @@
-import { setTimeout as delay } from 'node:timers/promises';
+import { delay } from '../src/delay.ts';
 import type { GroupAction, GroupMember, GroupState } from '../src/rooms.ts';
 import { localAddress, validUuid } from './setup.ts';
 import type { SetupTransport } from './setup.ts';

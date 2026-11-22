@@ -1,4 +1,4 @@
-import { setTimeout as delay } from 'node:timers/promises';
+import { delay } from './delay.ts';
 
 import { inputLabels, type InputId } from './inputs.ts';
 

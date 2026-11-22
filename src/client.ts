@@ -1,4 +1,10 @@
+import { directConnection } from './connection.ts';
+
 export async function requestJson<T>(endpoint: string, body?: object, timeoutMs = 7500): Promise<T> {
+  if (directConnection) {
+    const { requestDirect } = await import('./directClient.ts');
+    return await requestDirect(endpoint, body) as T;
+  }
   let response: Response;
   let result;
   const signal = AbortSignal.timeout(timeoutMs);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { requestJson } from './client.ts';
+import { nativePhone } from './connection.ts';
 import { captureSweep } from './captureSweep.ts';
 import { recommendTuning, tuningVolumeLimit } from './roomTuning.ts';
 import { toneBands, type ToneSettings } from './tone.ts';
@@ -54,7 +55,7 @@ export function RoomTuning({ roomId, online, onEqChange }: { roomId?: string; on
           previous ? { expectedVolume: previous.volume } : {}, 13000);
         controller.signal.throwIfAborted();
         if (!Number.isInteger(volume) || volume < 1 || volume > tuningVolumeLimit) {
-          throw new Error('The bridge could not confirm the measurement volume. Check the bridge version and try again.');
+          throw new Error('Clear Two could not confirm the measurement volume. Refresh the speaker and try again.');
         }
         if (previous && previous.volume !== volume) {
           setRestart(true);
@@ -127,7 +128,7 @@ export function RoomTuning({ roomId, online, onEqChange }: { roomId?: string; on
         <p>Ungroup the speaker, select Wi-Fi / Network, pause or stop playback, and keep the speaker at the same volume (1–{tuningVolumeLimit}%) for all three positions. The test sweep can replace the current queue.</p>
         <p>{recording ? 'Measuring. Keep the microphone still until the sweep finishes.' : `Position ${measurements.length + 1} of 3. Hold the microphone at ear height ${positionPrompts[measurements.length]}.`}</p>
         {!recording && <p>Keep the microphone pointed the same way. A cut is suggested only when bass or treble measures high relative to the midrange at all three positions.</p>}
-        {!canRecord && <p className="feedback" role="status">Open Clear Two over trusted HTTPS on your phone, or use localhost on the bridge computer, to enable the microphone.</p>}
+        {!canRecord && <p className="feedback" role="status">{nativePhone ? 'Microphone capture is unavailable on this device.' : 'Open Clear Two over trusted HTTPS on your phone, or use localhost on the bridge computer, to enable the microphone.'}</p>}
         {recording ? <button className="mute" type="button" onClick={() => capture.current?.abort()}>Cancel measurement</button>
           : <button className="primary" type="button" disabled={!online || !canRecord || restart} onClick={() => void measure()}>Measure position</button>}
         {!recording && (measurements.length > 0 || restart) && <button className="mute" type="button" onClick={startOver}>Start over</button>}

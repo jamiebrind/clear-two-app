@@ -1,11 +1,12 @@
-import { isIPv4 } from 'node:net';
 import type { SetupJoin, SetupNetwork, SetupProgress, SetupScan, SetupSpeaker } from '../src/setup.ts';
 
 export const hotspot = '10.10.10.254';
 export type SetupTransport = (address: string, command: string) => Promise<string>;
 
 export function localAddress(value: unknown): value is string {
-  return typeof value === 'string' && isIPv4(value) && /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(value);
+  if (typeof value !== 'string' || !/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(value)) return false;
+  const octets = value.split('.');
+  return octets.length === 4 && octets.every((part) => /^(0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
 }
 
 export function validUuid(value: unknown): value is string {
@@ -21,7 +22,7 @@ export function parseNetworks(response: string): SetupNetwork[] {
     const channel = Number(entry?.channel);
     if (typeof encoded !== 'string' || !/^(?:[0-9a-f]{2}){1,32}$/i.test(encoded) || !Number.isInteger(channel) || channel < 1 || channel > 12) continue;
     let ssid: string;
-    try { ssid = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.from(encoded, 'hex')); }
+    try { ssid = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Uint8Array.from(encoded.match(/../g)!, (pair) => parseInt(pair, 16))); }
     catch { continue; }
     if (!ssid.trim() || networks.has(ssid)) continue;
     const auth = String(entry.auth).toUpperCase();
@@ -57,12 +58,13 @@ export function createSetup(request: SetupTransport) {
       const network = networks.find((entry) => entry.ssid === ssid && entry.channel === channel);
       if (!network) throw new Error('That network is no longer listed. Scan again.');
       const secured = network.security === 'WPA2';
-      const bytes = Buffer.from(password, 'utf8');
+      const encoder = new TextEncoder();
+      const bytes = encoder.encode(password);
       if (secured ? bytes.length < 8 || bytes.length > 63 : bytes.length !== 0) {
         throw new Error(secured ? 'Enter a Wi-Fi password between 8 and 63 bytes.' : 'This open network does not use a password.');
       }
-      const hex = (value: Buffer) => value.toString('hex').toUpperCase();
-      const command = `wlanConnectApEx:ssid=${hex(Buffer.from(network.ssid))}:ch=${channel}:auth=${secured ? 'WPA2PSK' : 'OPEN'}:encry=${secured ? 'AES' : 'NONE'}:pwd=${hex(bytes)}:chext=1`;
+      const hex = (value: Uint8Array) => Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+      const command = `wlanConnectApEx:ssid=${hex(encoder.encode(network.ssid))}:ch=${channel}:auth=${secured ? 'WPA2PSK' : 'OPEN'}:encry=${secured ? 'AES' : 'NONE'}:pwd=${hex(bytes)}:chext=1`;
       // The hotspot may close before the command returns. Verify completion independently.
       let reply: string;
       try { reply = await request(hotspot, command); }

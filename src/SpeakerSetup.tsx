@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, Router, Speaker, Wifi, ShieldCheck } from 'lucide-react';
 import { requestJson } from './client.ts';
+import { directBrowser, directConnection, iosPhone, speakerLan } from './connection.ts';
 import type { SetupProgress, SetupScan, SetupSpeaker } from './setup.ts';
 
 const api = '/api/setup';
@@ -19,7 +20,8 @@ export function SpeakerSetup({ onClose }: { onClose: (roomId?: string) => void }
   const [localSetupUrl, setLocalSetupUrl] = useState('');
   const network = networkIndex === '' ? undefined : scan?.networks[Number(networkIndex)];
   const uuid = scan?.speaker.uuid;
-  const isLocal = ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+  const isLocal = directConnection || ['127.0.0.1', 'localhost'].includes(window.location.hostname);
+  const device = directConnection ? 'this device' : 'this computer';
 
   useEffect(() => {
     if (isLocal) return;
@@ -86,11 +88,15 @@ export function SpeakerSetup({ onClose }: { onClose: (roomId?: string) => void }
           <p>Power on your Up2Stream Amp V4.</p>
           <button type="button" className="primary setup-option" onClick={() => go('hotspot')}><Wifi size={19} aria-hidden="true" /> Connect to Wi-Fi</button>
           <button type="button" className="mute setup-option" onClick={() => { setScan(undefined); setAddress(''); go('verify'); }}><Router size={19} aria-hidden="true" /> Add by IP address</button>
-          <p>If the speaker already has Wi-Fi or Ethernet, you can also find it with Scan network in Rooms.</p>
+          <p>{directBrowser ? 'Direct browser access requires the speaker and browser to allow local HTTP requests. The phone app also supports network discovery.' : 'If the speaker already has Wi-Fi or Ethernet, you can also find it with Scan network in Rooms.'}</p>
         </div>}
         {step === 'hotspot' && <div className="setup-actions">
           <p>On the Amp V4 in Wi-Fi mode, press its mode button twice briefly to enter pairing mode. Wait for the white light to blink slowly.</p>
-          <p>In this computer’s Wi-Fi settings, join the speaker’s temporary network, often named <strong>SoundSystem_…</strong>. Keep this page open.</p>
+          <p>Join the speaker’s temporary network, often named <strong>SoundSystem_…</strong>, in Wi-Fi settings on {device}. Then return to Clear Two.</p>
+          {iosPhone && <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => {
+            await speakerLan.joinHotspot();
+            setScan(await requestJson<SetupScan>(`${api}/scan`)); setNetworkIndex(''); setPassword(''); go('network');
+          })}>Join speaker Wi-Fi</button>}
           <button type="button" className="primary" disabled={busy} onClick={() => void run(async () => {
             setScan(await requestJson<SetupScan>(`${api}/scan`)); setNetworkIndex(''); setPassword(''); go('network');
           })}>{busy ? 'Reading Wi-Fi networks…' : 'I’ve joined the speaker’s Wi-Fi'}</button>
@@ -128,9 +134,9 @@ export function SpeakerSetup({ onClose }: { onClose: (roomId?: string) => void }
             go('done');
           });
         }}>
-          <p>{uuid ? 'Reconnect this computer to your home Wi-Fi, then verify the speaker.' : 'Connect this computer to the same home network as the speaker.'}</p>
-          <label htmlFor="setup-address">{uuid ? 'Speaker IP address (optional)' : 'Speaker IP address'}</label>
-          <input id="setup-address" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="192.168.1.100" inputMode="decimal" required={!uuid} />
+          <p>{uuid ? `Reconnect ${device} to your home Wi-Fi, then verify the speaker.` : `Connect ${device} to the same home network as the speaker.`}</p>
+          <label htmlFor="setup-address">{uuid && !directBrowser ? 'Speaker IP address (optional)' : 'Speaker IP address'}</label>
+          <input id="setup-address" value={address} onChange={(event) => setAddress(event.target.value)} placeholder="192.168.1.100" inputMode="decimal" required={!uuid || directBrowser} />
           <button type="submit" className="primary" disabled={busy}>{busy ? 'Checking the home network…' : 'Find and add speaker'}</button>
           <button type="button" className="mute" disabled={busy} onClick={() => go(uuid ? 'hotspot' : 'start')}>Back</button>
         </form>}

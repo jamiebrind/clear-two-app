@@ -1,22 +1,12 @@
 import { once } from 'node:events';
 import { createConnection } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
-import { toneBands } from '../src/tone.ts';
-import type { ToneBand, ToneChange, ToneSettings } from '../src/tone.ts';
+import { createToneOperations, validGain, type ToneQuery } from '../src/tone.ts';
+export { parseToneChange, ToneConflict } from '../src/tone.ts';
 
 const header = Buffer.from('18961820', 'hex');
 const commands = { bass: 'BAS', mid: 'MID', treble: 'TRE' };
 const checksum = (data: Buffer) => data.reduce((sum, byte) => sum + byte, 0);
-
-function validGain(gain: unknown): gain is number {
-  return typeof gain === 'number' && Number.isInteger(gain) && gain >= -10 && gain <= 10;
-}
-
-export function parseToneChange(body: unknown): ToneChange | null {
-  if (!body || typeof body !== 'object' || !('band' in body) || !('gain' in body) || Object.keys(body).length !== 2) return null;
-  const { band, gain } = body;
-  return toneBands.some((known) => known === band) && validGain(gain) ? { band: band as ToneBand, gain } : null;
-}
 
 export function frameCommand(command: string): Buffer {
   const payload = Buffer.from(command);
@@ -28,26 +18,11 @@ export function frameCommand(command: string): Buffer {
   return packet;
 }
 
-type Query = (band: ToneBand, gain?: number) => Promise<number>;
-
-export class ToneConflict extends Error {}
-
-async function readSettings(query: Query): Promise<ToneSettings> {
-  return { bass: await query('bass'), mid: await query('mid'), treble: await query('treble') };
-}
-
-async function setGain(query: Query, band: ToneBand, gain: number) {
-  await query(band, gain);
-  const actual = await query(band);
-  if (actual !== gain) throw new Error('The amplifier did not confirm the requested tone setting.');
-  return actual;
-}
-
 export function createToneController(host: string, port = 8899) {
   let nextSend = 0;
   let busy = false;
 
-  async function withConnection<T>(operation: (query: Query) => Promise<T>): Promise<T> {
+  async function withConnection<T>(operation: (query: ToneQuery) => Promise<T>): Promise<T> {
     if (busy) throw new Error('A tone request is already in progress.');
     busy = true;
     const socket = createConnection({ host, port });
@@ -98,41 +73,5 @@ export function createToneController(host: string, port = 8899) {
     }
   }
 
-  return {
-    read: () => withConnection(readSettings),
-    change: ({ band, gain }: ToneChange) => withConnection((query) => setGain(query, band, gain)),
-    async replace(expected: ToneSettings, target: ToneSettings) {
-      const attempted: ToneBand[] = [];
-      if (toneBands.some((band) => !validGain(target[band]))) throw new ToneConflict('Invalid EQ settings.');
-      try {
-        return await withConnection(async (query) => {
-          const current = await readSettings(query);
-          if (toneBands.some((band) => expected[band] !== current[band])) {
-            throw new ToneConflict('The EQ has changed since measurement. Review the current settings before trying again.');
-          }
-          for (const band of toneBands) {
-            if (target[band] === current[band]) continue;
-            attempted.push(band);
-            await setGain(query, band, target[band]);
-          }
-          return target;
-        });
-      } catch (error) {
-        if (!attempted.length) throw error;
-        try {
-          await withConnection(async (query) => {
-            for (const band of attempted) {
-              const actual = await query(band);
-              if (actual === expected[band]) continue;
-              if (actual !== target[band]) throw new Error('EQ changed elsewhere.');
-              await setGain(query, band, expected[band]);
-            }
-          });
-        } catch {
-          throw new Error('Could not restore all EQ settings. Check Tone controls against your saved original settings.');
-        }
-        throw new Error('Could not confirm the EQ change. The previous settings were restored.');
-      }
-    },
-  };
+  return createToneOperations(withConnection);
 }

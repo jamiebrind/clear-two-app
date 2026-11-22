@@ -1,4 +1,3 @@
-import { isIPv4 } from 'node:net';
 import type { RoomSummary } from '../src/rooms.ts';
 import { localAddress, validUuid } from './setup.ts';
 import type { SetupSpeaker } from '../src/setup.ts';
@@ -28,7 +27,7 @@ export function createRooms(saved: unknown, configured: string, persist: (value:
 
   function configuredRoom(): Room | undefined {
     if (configuredId) return rooms.get(configuredId);
-    if (!isIPv4(legacyAddress) || legacyAddress === '0.0.0.0') return;
+    if (!localAddress(legacyAddress)) return;
     return [...rooms.values()].find((room) => room.address === legacyAddress) ??
       { id: 'configured', name: 'Configured speaker', address: legacyAddress };
   }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AudioLines, ChevronDown, Pause, Play, Plus, Radar, RefreshCw, Speaker, Volume2, VolumeX } from 'lucide-react';
 import { requestJson } from './client.ts';
+import { directBrowser, nativePhone, standaloneWeb } from './connection.ts';
 import { ToneControls } from './ToneControls.tsx';
 import { SpeakerSetup } from './SpeakerSetup.tsx';
 import { GroupControls } from './GroupControls.tsx';
@@ -68,7 +69,7 @@ function App() {
       if (discover) {
         const count = result.foundCount;
         setNotice(count === undefined ? 'Room list refreshed.' : count === 0
-          ? 'No speakers responded. Check that the speakers and bridge are on the same network.'
+          ? 'No speakers responded. Check Wi-Fi, or add the speaker by IP address.'
           : `Found ${count} ${count === 1 ? 'speaker' : 'speakers'} on the network.`);
       }
     } catch (problem) {
@@ -147,7 +148,7 @@ function App() {
               </li>)}
             </ul>
           </nav>}
-          {selectedRoom?.id !== legacyRoomId && <button type="button" className="mute scan-action" onClick={() => void loadRooms(true)} disabled={loading || scanning}>
+          {!directBrowser && selectedRoom?.id !== legacyRoomId && <button type="button" className="mute scan-action" onClick={() => void loadRooms(true)} disabled={loading || scanning}>
             <Radar size={18} aria-hidden="true" />{scanning ? 'Searching…' : 'Scan network'}
           </button>}
           {notice && <p className="rooms-notice" role="status">{notice}</p>}
@@ -157,9 +158,10 @@ function App() {
         {selectedRoom ? <Room key={selectedRoom.id} room={selectedRoom} rooms={available} /> : <section className="room room-empty" aria-labelledby="empty-heading">
           <div className="source-icon"><Speaker size={30} strokeWidth={1.65} aria-hidden="true" /></div>
           <h1 id="empty-heading">{emptyHeading}</h1>
-          {rooms && !loading && <p>{unavailable ? 'Choose another speaker from the room list or scan the network.' : 'Scan for speakers that are already connected, or add a speaker to your Wi-Fi.'}</p>}
+          {rooms && !loading && <p>{directBrowser ? 'Choose Add speaker to connect by IP address.' : unavailable ? 'Choose another speaker from the room list or scan the network.' : 'Scan for speakers that are already connected, or add a speaker to your Wi-Fi.'}</p>}
         </section>}
       </div>}
+      {!nativePhone && !standaloneWeb && !showSetup && <footer className="connection-choice"><a href={directBrowser ? '?' : '?direct'}>{directBrowser ? 'Use a local bridge' : 'Connect directly by IP'}</a></footer>}
     </main>
   );
 }
@@ -189,7 +191,7 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
       setConnectionError('');
     } catch (error) {
       setConnection('offline');
-      setConnectionError(error instanceof Error ? error.message : 'Could not reach the Clear Two bridge.');
+      setConnectionError(error instanceof Error ? error.message : 'Could not reach the speaker.');
     } finally {
       reading.current = null;
     }
@@ -287,8 +289,8 @@ function Room({ room, rooms }: { room: RoomSummary; rooms: RoomSummary[] }) {
         </section>
 
         {!legacy && <GroupControls room={room} rooms={rooms} online={connection === 'online'} onChange={() => void refresh()} />}
-        <ToneControls roomId={legacy ? undefined : room.id} online={connection === 'online'} revision={toneRevision} />
-        <RoomTuning roomId={legacy ? undefined : room.id} online={connection === 'online'} onEqChange={() => setToneRevision((value) => value + 1)} />
+        {!directBrowser && <ToneControls roomId={legacy ? undefined : room.id} online={connection === 'online'} revision={toneRevision} />}
+        {!directBrowser && <RoomTuning roomId={legacy ? undefined : room.id} online={connection === 'online'} onEqChange={() => setToneRevision((value) => value + 1)} />}
         <details className="device"><summary>Device information <ChevronDown size={18} aria-hidden="true" /></summary>
           <dl><div><dt>Board</dt><dd>{speaker.model ?? 'Unavailable'}</dd></div><div><dt>Network firmware</dt><dd>{speaker.firmware ?? 'Unavailable'}</dd></div></dl>
         </details></>}

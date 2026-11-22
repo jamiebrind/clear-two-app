@@ -339,10 +339,7 @@ app.post('/api/tuning/measure', setupJson, async (request, response) => {
       if (host.startsWith('127.')) throw new TuningConflict('Bind the bridge to its LAN address so the speaker can fetch the sweep.');
       const room = await verifyRoom(selected);
       const [state, group] = await Promise.all([configuredSpeaker(room.address).read(), createGroup(requestDevice).read(room.address)]);
-      verifySweepPlayback(state, group);
-      if (request.body?.expectedVolume !== undefined && request.body.expectedVolume !== state.volume) {
-        throw new TuningConflict('Speaker volume changed between positions. Restore the original volume or start over.');
-      }
+      verifySweepPlayback(state, group, request.body?.expectedVolume);
       const token = tuningSweep.issue(room.address);
       const reply = await requestDevice(room.address, `setPlayerCmd:play:http://${host}:${port}/api/tuning/sweep/${token}`).catch(() => null);
       if (reply !== null && reply.trim() !== 'OK') throw new Error('The amplifier rejected the test sweep.');
