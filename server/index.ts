@@ -1,45 +1,108 @@
 import { createServer } from 'node:http';
 import { isIPv4 } from 'node:net';
-import { readFileSync } from 'node:fs';
-import { rename, writeFile } from 'node:fs/promises';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { createSpeaker, parseLevelChange } from '../src/speaker.ts';
 import { createToneController, parseToneChange } from './tone.ts';
 import { createSetup, localAddress, validUuid } from './setup.ts';
 import { discoverSpeakers } from './discovery.ts';
+import { createGroup, GroupConflict, parseGroupAction } from './group.ts';
+import { createRooms } from './rooms.ts';
+import type { Room } from './rooms.ts';
 
 const selection = new URL('../speaker.local.json', import.meta.url);
 const pendingSelection = new URL('../speaker.local.json.tmp', import.meta.url);
-let amplifier = process.env.CLEAR_TWO_SPEAKER_IP ?? '';
+const configuredAddress = process.env.CLEAR_TWO_SPEAKER_IP ?? '';
+let storedRooms: unknown;
 try {
-  const saved = JSON.parse(readFileSync(selection, 'utf8'));
-  if (localAddress(saved.address)) amplifier = saved.address;
+  storedRooms = JSON.parse(readFileSync(selection, 'utf8'));
 } catch (error) {
-  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('Could not read the saved room list. Use discovery to recover speaker addresses.');
 }
 const host = process.env.CLEAR_TWO_HOST ?? '127.0.0.1';
 const port = Number(process.env.CLEAR_TWO_PORT ?? 4273);
 const development = process.argv.includes('--dev');
 
-if (amplifier && (!isIPv4(amplifier) || amplifier === '0.0.0.0')) {
-  throw new Error('Set CLEAR_TWO_SPEAKER_IP to your amplifier’s IPv4 address in .env or your environment.');
+if (configuredAddress && !localAddress(configuredAddress)) {
+  throw new Error('Set CLEAR_TWO_SPEAKER_IP to your amplifier’s private IPv4 address in .env or your environment.');
 }
 if (!isIPv4(host) || host === '0.0.0.0' || !Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('Bind the bridge to a specific IPv4 address and a port from 1 to 65535.');
 }
 
-async function requestDevice(address: string, command: string) {
+async function requestDevice(address: string, command: string, limit?: AbortSignal) {
   const url = new URL(`http://${address}/httpapi.asp`);
   url.searchParams.set('command', command);
-  const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(2500) });
+  const timeout = AbortSignal.timeout(2500);
+  const response = await fetch(url, { redirect: 'error', signal: limit ? AbortSignal.any([limit, timeout]) : timeout });
   if (!response.ok) throw new Error(`The amplifier returned HTTP ${response.status}.`);
   return response.text();
 }
 const setup = createSetup(requestDevice);
 const configuredSpeaker = (address: string) => createSpeaker((command) => requestDevice(address, command));
-let speaker = configuredSpeaker(amplifier);
-let tones = createToneController(amplifier);
+const registry = createRooms(storedRooms, configuredAddress, (value) => {
+  writeFileSync(pendingSelection, JSON.stringify(value, null, 2) + '\n');
+  renameSync(pendingSelection, selection);
+});
+const tonesByAddress = new Map<string, ReturnType<typeof createToneController>>();
+const mutating = new Set<string>();
+let changingGroup = false;
+let discovery: Promise<void> | undefined;
+let lastDiscovery = -Infinity;
+
+function roomsResponse() {
+  const defaultId = registry.get()?.id;
+  const configuredId = registry.get('configured')?.id;
+  return { rooms: registry.list(), ...(defaultId && { defaultId }), ...(configuredId && { configuredId }) };
+}
+
+function findRooms(): Promise<void> {
+  if (discovery) return discovery;
+  lastDiscovery = Date.now();
+  discovery = discoverSpeakers().then(async (addresses) => {
+    const results = await Promise.allSettled(addresses.map(async (address) => ({ ...await setup.verify(address), address })));
+    registry.remember(results.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+  }).finally(() => { discovery = undefined; });
+  return discovery;
+}
+
+class RoomUnavailable extends Error {}
+
+async function verifyRoom(room: Room, limit?: AbortSignal): Promise<Room> {
+  try {
+    if (room.id === 'configured') {
+      // Upgrade an existing address-only installation to the speaker's stable ID.
+      const verified = await createSetup((address, command) => requestDevice(address, command, limit)).verify(room.address);
+      registry.remember([{ ...verified, address: room.address }]);
+      return registry.get(verified.uuid)!;
+    }
+    await createSetup((address, command) => requestDevice(address, command, limit)).verify(room.address, room.id);
+    return room;
+  } catch {
+    if (Date.now() - lastDiscovery > 8000) void findRooms().catch(() => {});
+    throw new RoomUnavailable('Speaker is offline or its address changed. Find speakers to reconnect.');
+  }
+}
+
+function requestedRoom(value: unknown) {
+  if (value === undefined || typeof value === 'string') return registry.get(value);
+}
+
+async function mutate<T>(devices: Room[], operation: () => Promise<T>, affectsGroup = false): Promise<T> {
+  const keys = devices.map((device) => device.address);
+  // An amplifier's group members can change outside Clear Two. Group writes must not race individual writes.
+  if (changingGroup || (affectsGroup && mutating.size > 0) || keys.some((key) => mutating.has(key))) {
+    throw new GroupConflict('Another sound or group change is in progress. Try again.');
+  }
+  if (affectsGroup) changingGroup = true;
+  keys.forEach((key) => mutating.add(key));
+  try { return await operation(); }
+  finally {
+    keys.forEach((key) => mutating.delete(key));
+    if (affectsGroup) changingGroup = false;
+  }
+}
 
 const app = express();
 const server = createServer(app);
@@ -60,14 +123,16 @@ app.use('/api', (_request, response, next) => {
 });
 
 app.get('/api/speaker', async (_request, response) => {
-  if (!amplifier) {
+  const selected = requestedRoom(_request.query.room);
+  if (!selected) {
     response.status(404).json({ error: 'Add a speaker to get started.' });
     return;
   }
   try {
-    response.json(await speaker.read());
+    const room = await verifyRoom(selected);
+    response.json(await configuredSpeaker(room.address).read());
   } catch {
-    response.status(502).json({ error: `Could not read the amplifier at ${amplifier}. Check that it is on the same network.` });
+    response.status(502).json({ error: 'Could not reach this speaker. Check its connection or find speakers again.' });
   }
 });
 
@@ -77,6 +142,15 @@ app.use('/api', (request, response, next) => {
     return;
   }
   next();
+});
+
+app.get('/api/rooms', (_request, response) => response.json(roomsResponse()));
+
+app.post('/api/rooms/discover', async (_request, response) => {
+  try {
+    await findRooms();
+    response.json(roomsResponse());
+  } catch { response.status(502).json({ error: 'Could not scan for speakers. Try again or add a speaker by address.' }); }
 });
 
 app.use('/api/setup', (request, response, next) => {
@@ -136,45 +210,48 @@ app.post('/api/setup/add', setupJson, async (request, response) => {
       response.status(404).json({ error: 'Could not find that speaker on the home network. Check Wi-Fi or enter its IP address.' });
       return;
     }
-    await writeFile(pendingSelection, JSON.stringify({ address: match.value.address }) + '\n');
-    await rename(pendingSelection, selection);
-    amplifier = match.value.address;
-    speaker = configuredSpeaker(amplifier);
-    tones = createToneController(amplifier);
+    registry.remember([{ ...match.value.speaker, address: match.value.address }], match.value.speaker.uuid);
     response.json(match.value.speaker);
   } catch {
     response.status(502).json({ error: 'Could not save the selected speaker. Try again.' });
   } finally { setupBusy = false; }
 });
 
-let applyingLevel = false;
+function writeFailure(response: express.Response, error: unknown, message: string) {
+  const status = error instanceof GroupConflict ? 409 : 502;
+  const detail = error instanceof GroupConflict || error instanceof RoomUnavailable || (error instanceof Error && /^The amplifier |^Could not confirm/.test(error.message));
+  response.status(status).json({ error: detail ? (error as Error).message : message });
+}
+
 app.post('/api/speaker/level', express.json({ limit: '1kb' }), async (request, response) => {
   const level = parseLevelChange(request.body);
   if (!level) {
     response.status(400).json({ error: 'Send a volume from 0 to 100 or a mute setting.' });
     return;
   }
-  if (applyingLevel) {
-    response.status(409).json({ error: 'Another sound change is in progress. Try again.' });
-    return;
-  }
-
-  applyingLevel = true;
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
   try {
-    response.json(await speaker.change(level));
+    response.json(await mutate([selected], async () => configuredSpeaker((await verifyRoom(selected)).address).change(level)));
   } catch (error) {
-    const message = error instanceof Error && error.message.startsWith('The amplifier')
-      ? error.message
-      : 'Could not confirm the change. Refresh to check the current setting.';
-    response.status(502).json({ error: message });
-  } finally {
-    applyingLevel = false;
+    writeFailure(response, error, 'Could not confirm the change. Refresh to check the current setting.');
   }
 });
 
-app.get('/api/speaker/tone', async (_request, response) => {
+function toneController(address: string) {
+  let tones = tonesByAddress.get(address);
+  if (!tones) {
+    tones = createToneController(address);
+    tonesByAddress.set(address, tones);
+  }
+  return tones;
+}
+
+app.get('/api/speaker/tone', async (request, response) => {
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
   try {
-    response.json(await tones.read());
+    response.json(await toneController((await verifyRoom(selected)).address).read());
   } catch {
     response.status(502).json({ error: 'Could not read tone settings from the amplifier. Try again.' });
   }
@@ -186,11 +263,44 @@ app.post('/api/speaker/tone', express.json({ limit: '1kb' }), async (request, re
     response.status(400).json({ error: 'Choose bass, mid or treble and a whole number from −10 to +10.' });
     return;
   }
+  const selected = requestedRoom(request.query.room);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
   try {
-    response.json({ band: change.band, gain: await tones.change(change) });
-  } catch {
-    response.status(502).json({ error: 'Could not confirm the tone change. Refresh tone settings and try again.' });
+    const gain = await mutate([selected], async () => toneController((await verifyRoom(selected)).address).change(change));
+    response.json({ band: change.band, gain });
+  } catch (error) {
+    writeFailure(response, error, 'Could not confirm the tone change. Refresh tone settings and try again.');
   }
+});
+
+app.get('/api/rooms/:id/group', async (request, response) => {
+  const selected = registry.get(request.params.id);
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
+  const deadline = AbortSignal.timeout(6500);
+  try {
+    const host = await verifyRoom(selected, deadline);
+    const group = createGroup((address, command) => requestDevice(address, command, deadline));
+    response.json(await group.read(host.address));
+  } catch (error) { writeFailure(response, error, 'Could not read this group. Refresh to try again.'); }
+});
+
+app.post('/api/rooms/:id/group', setupJson, async (request, response) => {
+  const action = parseGroupAction(request.body);
+  const selected = registry.get(request.params.id);
+  if (!action) { response.status(400).json({ error: 'Choose a valid group action.' }); return; }
+  if (!selected) { response.status(404).json({ error: 'Choose a saved speaker first.' }); return; }
+  const joining = action.action === 'join' ? registry.get(action.memberId) : undefined;
+  if (action.action === 'join' && !joining) { response.status(404).json({ error: 'Find and add that speaker before grouping it.' }); return; }
+
+  const deadline = AbortSignal.timeout(11000);
+  try {
+    const state = await mutate(joining ? [selected, joining] : [selected], async () => {
+      const [host, guest] = await Promise.all([verifyRoom(selected, deadline), joining && verifyRoom(joining, deadline)]);
+      const group = createGroup((address, command) => requestDevice(address, command, deadline));
+      return group.change(host.address, action, guest?.address);
+    }, true);
+    response.json(state);
+  } catch (error) { writeFailure(response, error, 'Could not confirm the group change. Refresh the group before trying again.'); }
 });
 app.use('/api', (_request, response) => response.status(404).json({ error: 'Unknown Clear Two endpoint.' }));
 

@@ -1,18 +1,18 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { requestJson } from './client.ts';
 import { toneBands } from './tone.ts';
 import type { ToneChange, ToneSettings } from './tone.ts';
 
 const labels = { bass: 'Bass', mid: 'Mid', treble: 'Treble' };
-const endpoint = '/api/speaker/tone';
-
-export function ToneControls({ online }: { online: boolean }) {
+export function ToneControls({ roomId, online }: { roomId?: string; online: boolean }) {
   const [settings, setSettings] = useState<ToneSettings>();
   const [draft, setDraft] = useState<Partial<ToneSettings>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
   const running = useRef(false);
+  const endpoint = `/api/speaker/tone${roomId ? `?room=${encodeURIComponent(roomId)}` : ''}`;
 
   async function update(change?: ToneChange) {
     if (running.current || !online) return;
@@ -30,14 +30,23 @@ export function ToneControls({ online }: { online: boolean }) {
       }
     } catch (problem) {
       setError(problem instanceof Error ? problem.message : 'Tone controls are unavailable.');
+      if (change) {
+        setDraft((current) => ({ ...current, [change.band]: undefined }));
+        try { setSettings(await requestJson<ToneSettings>(endpoint)); }
+        catch { setSettings(undefined); }
+      }
     } finally {
       setBusy(false);
       running.current = false;
     }
   }
 
+  useEffect(() => {
+    if (open && online) void update();
+  }, [open, online]);
+
   return (
-    <details className="device tone" onToggle={(event) => { if (event.currentTarget.open && !settings) void update(); }}>
+    <details className="device tone" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>Tone controls <ChevronDown size={18} aria-hidden="true" /></summary>
       <div className="tone-body" aria-busy={busy}>
         <p>Adjust the amplifier’s bass, mid and treble.</p>

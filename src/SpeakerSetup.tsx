@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Router, Speaker, Wifi, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Router, Speaker, Wifi, ShieldCheck } from 'lucide-react';
 import { requestJson } from './client.ts';
 import type { SetupProgress, SetupScan, SetupSpeaker } from './setup.ts';
 
 const api = '/api/setup';
 type Step = 'start' | 'hotspot' | 'network' | 'join' | 'verify' | 'done';
 
-export function SpeakerSetup({ onClose }: { onClose: () => void }) {
+export function SpeakerSetup({ onClose }: { onClose: (roomId?: string) => void }) {
   const [step, setStep] = useState<Step>('start');
   const [scan, setScan] = useState<SetupScan>();
   const [networkIndex, setNetworkIndex] = useState('');
@@ -68,13 +68,14 @@ export function SpeakerSetup({ onClose }: { onClose: () => void }) {
     <section className="setup" aria-labelledby="setup-title" aria-busy={busy}>
       <div className="setup-heading"><span className="source-icon"><Icon size={25} aria-hidden="true" /></span><h1 id="setup-title" aria-live="polite">{headings[step]}</h1></div>
       {!isLocal ? <div className="setup-actions">
-        <p>Open setup on the computer running the Clear Two bridge.</p>
-        <a className="primary setup-link" href={`http://127.0.0.1:${window.location.port || '4273'}/?setup`}>Open setup on this PC</a>
+        <p>On the computer running the Clear Two bridge, open <code>http://127.0.0.1:{window.location.port || '4273'}/?setup</code> to add a speaker.</p>
+        <p>If the speaker is already on your network, return to Rooms and use Scan network.</p>
       </div> : <>
         {step === 'start' && <div className="setup-actions">
-          <p>Power on your Up2Stream Amp V4. If it’s already plugged into your router by Ethernet, add it from your home network.</p>
-          <button type="button" className="primary" onClick={() => go('hotspot')}>Set up Wi-Fi</button>
-          <button type="button" className="mute" onClick={() => { setScan(undefined); setAddress(''); go('verify'); }}>Already on my network</button>
+          <p>Power on your Up2Stream Amp V4.</p>
+          <button type="button" className="primary setup-option" onClick={() => go('hotspot')}><Wifi size={19} aria-hidden="true" /> Connect to Wi-Fi</button>
+          <button type="button" className="mute setup-option" onClick={() => { setScan(undefined); setAddress(''); go('verify'); }}><Router size={19} aria-hidden="true" /> Add by IP address</button>
+          <p>If the speaker already has Wi-Fi or Ethernet, you can also find it with Scan network in Rooms.</p>
         </div>}
         {step === 'hotspot' && <div className="setup-actions">
           <p>On the Amp V4 in Wi-Fi mode, press its mode button twice briefly to enter pairing mode. Wait for the white light to blink slowly.</p>
@@ -122,10 +123,10 @@ export function SpeakerSetup({ onClose }: { onClose: () => void }) {
           <button type="submit" className="primary" disabled={busy}>{busy ? 'Checking the home network…' : 'Find and add speaker'}</button>
           <button type="button" className="mute" disabled={busy} onClick={() => go(uuid ? 'hotspot' : 'start')}>Back</button>
         </form>}
-        {step === 'done' && <div className="setup-actions"><p>{added?.name} is ready to control.</p><button type="button" className="primary" onClick={onClose}>Open speaker controls</button></div>}
+        {step === 'done' && <div className="setup-actions"><p>{added?.name} is ready to control.</p><button type="button" className="primary" onClick={() => onClose(added?.uuid.toUpperCase())}>Open speaker controls</button></div>}
       </>}
       {error && <p className="feedback" role="alert">{error}</p>}
-      {step !== 'done' && <button type="button" className="setup-cancel" onClick={onClose} disabled={busy}>Close setup</button>}
+      {step !== 'done' && <button type="button" className="setup-cancel" onClick={() => onClose()} disabled={busy}><ArrowLeft size={16} aria-hidden="true" /> Back to rooms</button>}
     </section>
   );
 }

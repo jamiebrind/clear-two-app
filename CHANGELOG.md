@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0
+
+- Added a responsive Rooms view, speaker discovery, and saved room selection by hardware ID.
+- Added grouped playback controls, including room join and removal, group and guest volume, guest mute, and ungrouping.
+- Added group readback after changes, recovery from lost join acknowledgements, and handling for partial group volume changes. Documented the remaining work in the [replacement review](REVIEW.md).
+
 ## v0.2.0
 
 - Added a desktop setup flow for the A31 Up2Stream Amp V4. It walks through joining the speaker hotspot, selecting a home Wi-Fi network, and verifying the speaker before saving its address.

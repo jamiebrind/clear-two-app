@@ -1,7 +1,7 @@
-export async function requestJson<T>(endpoint: string, body?: object): Promise<T> {
+export async function requestJson<T>(endpoint: string, body?: object, timeoutMs = 7500): Promise<T> {
   const response = await fetch(endpoint, {
     cache: 'no-store',
-    signal: AbortSignal.timeout(7500),
+    signal: AbortSignal.timeout(timeoutMs),
     ...(body && { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
   });
   const result = await response.json();
