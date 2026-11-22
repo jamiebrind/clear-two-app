@@ -33,7 +33,7 @@ Open `http://127.0.0.1:4273`. Use `npm.cmd run dev` during development. To acces
 
 Open **Add a speaker** on the computer running Clear Two. When the amp is in Wi-Fi pairing mode, use the computer’s Wi-Fi settings to join the amp’s temporary hotspot. Clear Two reads the amp’s network list and sends the selected 2.4 GHz WPA2 or open network settings. Rejoin your home network when prompted and let Clear Two find the amp, or enter its new IP if discovery misses it. Clear Two verifies the same hardware ID before saving the speaker. An amp already on Ethernet can be added by its local IP.
 
-The bridge accepts setup requests on loopback. Wi-Fi credentials are used for the setup request and never saved in the app’s configuration. A local room record stores the speaker’s name, hardware ID and verified address. Firmware-specific Wi-Fi onboarding still needs a pairing-mode hardware test. The desktop bridge uses the computer’s Wi-Fi settings to switch networks. Direct phone onboarding is part of native packaging.
+The bridge accepts setup requests on loopback. Wi-Fi credentials are used for the setup request and never saved in the app’s configuration. A local room record stores the speaker’s name, hardware ID and verified address. Firmware-specific Wi-Fi onboarding still needs a pairing-mode hardware test. Bridge users switch networks in the computer’s Wi-Fi settings. Installed app users do this on the phone.
 
 ## Current scope
 

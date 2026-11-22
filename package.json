@@ -7,7 +7,7 @@
     "dev": "node --env-file-if-exists=.env server/index.ts --dev",
     "start": "node --env-file-if-exists=.env server/index.ts",
     "build": "tsc --noEmit && vite build",
-    "build:web": "tsc --noEmit && vite build --mode standalone --outDir dist-web",
+    "build:web": "tsc --noEmit && vite build --mode standalone --base ./ --outDir dist-web",
     "mobile:sync": "npm run build && cap sync",
     "test": "node --test test/*.test.ts"
   },
